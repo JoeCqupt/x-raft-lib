@@ -1,0 +1,40 @@
+# Single-node election + proposal scenario.
+# Verifies a 1-voter cluster can become leader without messaging and that a
+# proposal commits in one stabilize round.
+
+add-nodes id=1 voters=1
+----
+INFO 1 switched to configuration voters=(1)
+INFO 1 became follower at term 0
+
+status id=1
+----
+id=1 state=StateFollower term=0 lead=0 commit=0 lastIndex=0
+
+campaign id=1
+----
+INFO 1 is starting a new election
+INFO 1 became StateCandidate at term 1
+
+stabilize
+----
+> 1 handling Ready: state=StateCandidate term=1 commit=0
+> 1 handling Ready: state=StateLeader term=1 commit=0
+> 1 handling Ready: state=StateLeader term=1 commit=1
+
+status id=1
+----
+id=1 state=StateLeader term=1 lead=1 commit=1 lastIndex=1
+
+propose id=1 data=hello
+----
+ok
+
+stabilize
+----
+> 1 handling Ready: state=StateLeader term=1 commit=1
+> 1 handling Ready: state=StateLeader term=1 commit=2
+
+status id=1
+----
+id=1 state=StateLeader term=1 lead=1 commit=2 lastIndex=2

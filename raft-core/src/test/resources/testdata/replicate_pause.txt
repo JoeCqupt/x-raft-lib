@@ -1,0 +1,114 @@
+# Port of etcd-raft's replicate_pause.txt.
+# Regression test for https://github.com/etcd-io/etcd/pull/14633.
+#
+# When a leader's in-flight tracker to a follower fills up, the MsgApp stream
+# to that follower must be paused (Progress.msgAppFlowPaused = true). Without
+# this, the leader would unbounded-fanout MsgApp regardless of inflight cap.
+
+# 3 nodes with very small inflight capacity (3) so we can saturate it quickly.
+add-nodes id=1,2,3 voters=1,2,3 inflight=3
+----
+INFO 1 switched to configuration voters=(1 2 3)
+INFO 1 became follower at term 0
+INFO 2 switched to configuration voters=(1 2 3)
+INFO 2 became follower at term 0
+INFO 3 switched to configuration voters=(1 2 3)
+INFO 3 became follower at term 0
+
+campaign id=1
+----
+INFO 1 is starting a new election
+INFO 1 became StateCandidate at term 1
+
+stabilize
+----
+> 1 handling Ready: state=StateCandidate term=1 commit=0
+> 2 receiving MsgRequestVote from 1
+> 2 handling Ready: state=StateFollower term=1 commit=0
+> 3 receiving MsgRequestVote from 1
+> 3 handling Ready: state=StateFollower term=1 commit=0
+> 1 receiving MsgRequestVoteResponse from 2
+> 1 receiving MsgRequestVoteResponse from 3
+> 1 handling Ready: state=StateLeader term=1 commit=0
+> 2 receiving MsgAppend from 1
+> 2 handling Ready: state=StateFollower term=1 commit=0
+> 3 receiving MsgAppend from 1
+> 3 handling Ready: state=StateFollower term=1 commit=0
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 3
+> 1 handling Ready: state=StateLeader term=1 commit=1
+> 2 receiving MsgAppend from 1
+> 2 handling Ready: state=StateFollower term=1 commit=1
+> 3 receiving MsgAppend from 1
+> 3 handling Ready: state=StateFollower term=1 commit=1
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 3
+
+# Propose 3 entries. With inflight=3, the leader's MsgApp tracking to peers
+# 2 and 3 should fill up after the broadcast.
+propose id=1 data=p12
+----
+ok
+
+propose id=1 data=p13
+----
+ok
+
+propose id=1 data=p14
+----
+ok
+
+# Push the leader's Ready out (one Ready that broadcasts the 3 new entries
+# in a single MsgApp each). Do NOT stabilize — we want to inspect the
+# leader's progress map before any follower responds.
+process-ready id=1
+----
+> 1 handling Ready: state=StateLeader term=1 commit=1
+
+# Expect followers 2 and 3 to be paused with inflight at the limit.
+# Note: in this simulator MsgApp batches several entries into one inflight
+# slot (see Progress.sentEntries which calls inflights.add once per send),
+# so the inflight count is 1 — but Inflights does have a byte-size limit too.
+# What's important is that the leader has recorded an inflight to each
+# follower and won't issue another MsgApp until it's acked.
+progress id=1
+----
+1: StateReplicate match=4 next=5
+2: StateReplicate match=1 next=5 paused inflight=3[full]
+3: StateReplicate match=1 next=5 paused inflight=3[full]
+
+# After followers ack, the inflights are freed and progress returns to a
+# normal StateReplicate with no pending in-flight.
+stabilize
+----
+> 2 receiving MsgAppend from 1
+> 2 receiving MsgAppend from 1
+> 2 receiving MsgAppend from 1
+> 2 handling Ready: state=StateFollower term=1 commit=1
+> 3 receiving MsgAppend from 1
+> 3 receiving MsgAppend from 1
+> 3 receiving MsgAppend from 1
+> 3 handling Ready: state=StateFollower term=1 commit=1
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 3
+> 1 receiving MsgAppendResponse from 3
+> 1 receiving MsgAppendResponse from 3
+> 1 handling Ready: state=StateLeader term=1 commit=4
+> 2 receiving MsgAppend from 1
+> 2 receiving MsgAppend from 1
+> 2 receiving MsgAppend from 1
+> 2 handling Ready: state=StateFollower term=1 commit=4
+> 3 receiving MsgAppend from 1
+> 3 handling Ready: state=StateFollower term=1 commit=4
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 3
+
+progress id=1
+----
+1: StateReplicate match=4 next=5
+2: StateReplicate match=4 next=5
+3: StateReplicate match=4 next=5

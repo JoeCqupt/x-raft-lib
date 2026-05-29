@@ -1,0 +1,35 @@
+version: 2
+updates:
+  # Maven dependencies across the whole reactor (parent + all modules).
+  - package-ecosystem: maven
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:13"
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+    groups:
+      # Keep related artifacts moving together to cut PR noise.
+      grpc:
+        patterns:
+          - "io.grpc:*"
+      test-tooling:
+        patterns:
+          - "org.junit*:*"
+          - "org.assertj:*"
+          - "net.jqwik:*"
+          - "org.openjdk.jmh:*"
+          - "org.bouncycastle:*"
+
+  # GitHub Actions used by the CI / publish / CodeQL workflows.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:13"
+    labels:
+      - dependencies
+      - ci

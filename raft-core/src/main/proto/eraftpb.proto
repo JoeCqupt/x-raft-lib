@@ -1,0 +1,159 @@
+// Copyright 2024-2026 The x-raft-lib Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// This file is derived from etcd-io/raft/raftpb/raft.proto
+// Copyright 2015 The etcd Authors. Licensed under Apache 2.0.
+
+syntax = "proto3";
+package eraftpb;
+
+option java_package = "io.github.xinfra.lab.raft.proto";
+option java_outer_classname = "Eraftpb";
+
+// Entry type: normal data or configuration change
+enum EntryType {
+    EntryNormal = 0;
+    EntryConfChange = 1;
+    EntryConfChangeV2 = 2;
+}
+
+// A Raft log entry
+message Entry {
+    EntryType entry_type = 1;
+    uint64 term = 2;
+    uint64 index = 3;
+    bytes data = 4;
+}
+
+// Snapshot metadata
+message SnapshotMetadata {
+    ConfState conf_state = 1;
+    uint64 index = 2;
+    uint64 term = 3;
+}
+
+// Snapshot data
+message Snapshot {
+    bytes data = 1;
+    SnapshotMetadata metadata = 2;
+}
+
+// Raft protocol message types
+enum MessageType {
+    MsgHup = 0;
+    MsgBeat = 1;
+    MsgPropose = 2;
+    MsgAppend = 3;
+    MsgAppendResponse = 4;
+    MsgRequestVote = 5;
+    MsgRequestVoteResponse = 6;
+    MsgSnapshot = 7;
+    MsgHeartbeat = 8;
+    MsgHeartbeatResponse = 9;
+    MsgUnreachable = 10;
+    MsgSnapStatus = 11;
+    MsgCheckQuorum = 12;
+    MsgTransferLeader = 13;
+    MsgTimeoutNow = 14;
+    MsgReadIndex = 15;
+    MsgReadIndexResp = 16;
+    MsgRequestPreVote = 17;
+    MsgRequestPreVoteResponse = 18;
+    MsgStorageAppend = 19;
+    MsgStorageAppendResp = 20;
+    MsgStorageApply = 21;
+    MsgStorageApplyResp = 22;
+    MsgForgetLeader = 23;
+}
+
+// Raft protocol message exchanged between peers
+message Message {
+    MessageType msg_type = 1;
+    uint64 to = 2;
+    uint64 from = 3;
+    uint64 term = 4;
+    uint64 log_term = 5;
+    uint64 index = 6;
+    repeated Entry entries = 7;
+    uint64 commit = 8;
+    uint64 vote = 13;
+    Snapshot snapshot = 9;
+    bool reject = 10;
+    uint64 reject_hint = 11;
+    bytes context = 12;
+    // responses are populated by a raft node to instruct storage threads on how
+    // to respond and who to respond to when the work associated with a message
+    // is complete. Populated for MsgStorageAppend and MsgStorageApply messages.
+    repeated Message responses = 14;
+}
+
+// Persisted hard state: must be saved to stable storage before sending messages
+message HardState {
+    uint64 term = 1;
+    uint64 vote = 2;
+    uint64 commit = 3;
+}
+
+// ConfChangeTransition specifies the behavior of a configuration change with
+// respect to joint consensus.
+enum ConfChangeTransition {
+    ConfChangeTransitionAuto = 0;
+    ConfChangeTransitionJointImplicit = 1;
+    ConfChangeTransitionJointExplicit = 2;
+}
+
+// Configuration state: the set of peers in the Raft group
+message ConfState {
+    // The voters in the incoming config.
+    repeated uint64 voters = 1;
+    // The learners in the incoming config.
+    repeated uint64 learners = 2;
+    // The voters in the outgoing config.
+    repeated uint64 voters_outgoing = 3;
+    // The nodes that will become learners when the outgoing config is removed.
+    repeated uint64 learners_next = 4;
+    // If set, the config is joint and Raft will automatically transition into
+    // the final config (i.e. remove the outgoing config) when this is safe.
+    bool auto_leave = 5;
+}
+
+// Configuration change type
+enum ConfChangeType {
+    ConfChangeAddNode = 0;
+    ConfChangeRemoveNode = 1;
+    ConfChangeUpdateNode = 2;
+    ConfChangeAddLearnerNode = 3;
+}
+
+// Configuration change (V1)
+message ConfChange {
+    uint64 id = 1;
+    ConfChangeType change_type = 2;
+    uint64 node_id = 3;
+    bytes context = 4;
+}
+
+// ConfChangeSingle is an individual configuration change operation.
+message ConfChangeSingle {
+    ConfChangeType type = 1;
+    uint64 node_id = 2;
+}
+
+// ConfChangeV2 messages initiate configuration changes. They support both the
+// simple "one at a time" membership change protocol and full Joint Consensus.
+message ConfChangeV2 {
+    ConfChangeTransition transition = 1;
+    repeated ConfChangeSingle changes = 2;
+    bytes context = 3;
+}

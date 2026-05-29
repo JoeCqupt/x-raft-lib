@@ -1,0 +1,103 @@
+# Port of etcd-raft's snapshot_succeed_via_app_resp.txt (regression test for
+# https://github.com/etcd-io/etcd/pull/10308).
+#
+# A snapshot whose index equals the leader's last index used to leave the
+# follower stuck in Probing state after receiving and applying the snapshot,
+# because the MsgAppResp from the follower (with index = snapshot.index) hit
+# the path that didn't transition Probe → Replicate. The fix is the
+# `pr.maybeUpdate(m.getIndex())` branch in stepLeader's MsgAppendResponse
+# handler that also covers the "match already equals m.getIndex()" case.
+#
+# We exercise this here by:
+# 1. Bootstrap a cluster of {1, 2} with the conf state declaring 3 voters.
+# 2. Stabilize so leader 1 has commit = lastIndex.
+# 3. Take a snapshot at that exact index and compact.
+# 4. Add the missing node 3.
+# 5. Stabilize — node 3 should receive a snapshot and end up in StateReplicate,
+#    NOT stuck in StateProbe.
+
+# Bring up two of the three nodes; the third (id=3) starts later.
+add-nodes id=1,2 voters=1,2,3
+----
+INFO 1 switched to configuration voters=(1 2 3)
+INFO 1 became follower at term 0
+INFO 2 switched to configuration voters=(1 2 3)
+INFO 2 became follower at term 0
+
+campaign id=1
+----
+INFO 1 is starting a new election
+INFO 1 became StateCandidate at term 1
+
+stabilize
+----
+> 1 handling Ready: state=StateCandidate term=1 commit=0
+> 2 receiving MsgRequestVote from 1
+> 2 handling Ready: state=StateFollower term=1 commit=0
+> 1 receiving MsgRequestVoteResponse from 2
+> 1 handling Ready: state=StateLeader term=1 commit=0
+> 2 receiving MsgAppend from 1
+> 2 handling Ready: state=StateFollower term=1 commit=0
+> 1 receiving MsgAppendResponse from 2
+> 1 handling Ready: state=StateLeader term=1 commit=1
+> 2 receiving MsgAppend from 1
+> 2 handling Ready: state=StateFollower term=1 commit=1
+> 1 receiving MsgAppendResponse from 2
+
+status id=1
+----
+id=1 state=StateLeader term=1 lead=1 commit=1 lastIndex=1
+
+# Take a snapshot at the leader's current last index and compact.
+create-snapshot id=1 index=1
+----
+snapshot index=1 term=1
+
+compact id=1 index=1
+----
+compacted to index=1
+
+log-state id=1
+----
+id=1 firstIndex=2 lastIndex=1 committed=1 applied=1
+
+# Add the missing node 3, fresh log.
+add-nodes id=3 voters=1,2,3
+----
+INFO 3 switched to configuration voters=(1 2 3)
+INFO 3 became follower at term 0
+
+# Tick the leader so it sends a heartbeat. The heartbeat → HeartbeatResp →
+# bcastAppend cycle is what discovers a newly-reachable follower and routes
+# the snapshot (the leader can't know to send a snapshot until it gets ANY
+# response from node 3 indicating its true match index).
+tick id=1
+----
+ok
+
+# Stabilize; node 3 must receive the snapshot and end up replicating.
+stabilize
+----
+> 1 handling Ready: state=StateLeader term=1 commit=1
+> 2 receiving MsgHeartbeat from 1
+> 2 handling Ready: state=StateFollower term=1 commit=1
+> 3 receiving MsgHeartbeat from 1
+> 3 handling Ready: state=StateFollower term=1 commit=0
+> 1 receiving MsgHeartbeatResponse from 2
+> 1 receiving MsgHeartbeatResponse from 3
+> 1 handling Ready: state=StateLeader term=1 commit=1
+> 3 receiving MsgSnapshot from 1
+> 3 handling Ready: state=StateFollower term=1 commit=1
+> 1 receiving MsgAppendResponse from 3
+
+# CRITICAL: node 3 must be StateReplicate, not stuck in StateProbe. This is
+# the etcd#10308 regression check.
+progress id=1
+----
+1: StateReplicate match=1 next=2
+2: StateReplicate match=1 next=2
+3: StateReplicate match=1 next=2
+
+status id=3
+----
+id=3 state=StateFollower term=1 lead=1 commit=1 lastIndex=1

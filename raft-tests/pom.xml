@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.x-infra-lab</groupId>
+        <artifactId>x-raft-lib</artifactId>
+        <version>0.1.0-alpha</version>
+    </parent>
+
+    <artifactId>raft-tests</artifactId>
+    <packaging>jar</packaging>
+
+    <name>x-raft-lib :: tests</name>
+    <description>
+        Cross-module integration tests for xinfra-raft. Exercises the
+        full raft-core + raft-transport-grpc + raft-storage-rocksdb
+        stack against real grpc sockets and real RocksDB stores. Not
+        published; intentionally separate from the per-module unit /
+        functional tests so the integration suite can be skipped on
+        fast inner-loop builds.
+    </description>
+
+    <properties>
+        <!-- Integration tests run by default (and on `mvn install`). Skip
+             them on the fast inner loop with `-P fast`, which flips this
+             flag to true (see the profile at the bottom of this pom). -->
+        <skip.integration.tests>false</skip.integration.tests>
+        <!-- Integration-test module: never publish to Maven Central. -->
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <skipPublishing>true</skipPublishing>
+    </properties>
+
+    <dependencies>
+        <!-- All four runtime modules; this is integration territory. -->
+        <dependency>
+            <groupId>io.github.x-infra-lab</groupId>
+            <artifactId>raft-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.x-infra-lab</groupId>
+            <artifactId>raft-transport-grpc</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.x-infra-lab</groupId>
+            <artifactId>raft-storage-rocksdb</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.x-infra-lab</groupId>
+            <artifactId>raft-examples</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+
+        <!-- test scope -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Integration-only module: never deploy to a repository. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-deploy-plugin</artifactId>
+                <configuration>
+                    <skip>true</skip>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <skip>${skip.integration.tests}</skip>
+                    <!-- Each integration test brings up real JVMs of grpc
+                         servers + RocksDB stores; running them in parallel
+                         risks port collisions and timing flakes. -->
+                    <forkCount>1</forkCount>
+                    <reuseForks>true</reuseForks>
+                    <!-- Long-running soak tests are excluded from the normal
+                         build; run them with `-P soak`. -->
+                    <excludedGroups>soak</excludedGroups>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!-- `mvn -P fast test` skips integration tests -->
+        <profile>
+            <id>fast</id>
+            <properties>
+                <skip.integration.tests>true</skip.integration.tests>
+            </properties>
+        </profile>
+        <!-- `mvn -P soak test` runs ONLY the @Tag("soak") long-running tests.
+             Tune duration with -Dsoak.durationSeconds=<n>. -->
+        <profile>
+            <id>soak</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <excludedGroups></excludedGroups>
+                            <groups>soak</groups>
+                            <forkCount>1</forkCount>
+                            <reuseForks>true</reuseForks>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

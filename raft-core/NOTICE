@@ -1,0 +1,71 @@
+x-raft-lib (raft-core)
+Copyright 2024-2026 The x-raft-lib Authors
+
+This product includes software developed at
+The x-infra-lab (https://github.com/x-infra-lab/x-raft-lib).
+
+==============================================================================
+
+This project is a Java port and adaptation of:
+
+    etcd-io/raft
+    Copyright 2015 The etcd Authors
+    Licensed under the Apache License, Version 2.0
+    https://github.com/etcd-io/raft
+
+The following components in this repository are derivative works of
+etcd-io/raft and retain the copyright of The etcd Authors:
+
+  * Core raft state machine
+        src/main/java/io/github/xinfra/lab/raft/Raft.java
+        src/main/java/io/github/xinfra/lab/raft/RaftLog.java
+        src/main/java/io/github/xinfra/lab/raft/Unstable.java
+        src/main/java/io/github/xinfra/lab/raft/RawNode.java
+        src/main/java/io/github/xinfra/lab/raft/Node.java
+        src/main/java/io/github/xinfra/lab/raft/MemoryStorage.java
+        src/main/java/io/github/xinfra/lab/raft/ReadOnly.java
+        src/main/java/io/github/xinfra/lab/raft/Storage.java
+
+  * Tracker, configuration change, and quorum subsystems
+        src/main/java/io/github/xinfra/lab/raft/tracker/**
+        src/main/java/io/github/xinfra/lab/raft/confchange/**
+        src/main/java/io/github/xinfra/lab/raft/quorum/**
+
+  * Wire protocol definition
+        src/main/proto/eraftpb.proto
+
+  * Test fixtures and the data-driven test corpus
+        src/test/java/io/github/xinfra/lab/raft/RaftTest.java
+        src/test/java/io/github/xinfra/lab/raft/RaftLogTest.java
+        src/test/java/io/github/xinfra/lab/raft/RaftPaperTest.java
+        src/test/java/io/github/xinfra/lab/raft/UnstableTest.java
+        src/test/java/io/github/xinfra/lab/raft/MemoryStorageTest.java
+        src/test/java/io/github/xinfra/lab/raft/InteractionTest.java
+        src/test/java/io/github/xinfra/lab/raft/RawNodeTest.java
+        src/test/java/io/github/xinfra/lab/raft/AsyncStorageWritesTest.java
+        src/test/java/io/github/xinfra/lab/raft/RaftFlowControlTest.java
+        src/test/java/io/github/xinfra/lab/raft/RaftSnapTest.java
+        src/test/java/io/github/xinfra/lab/raft/tracker/**
+        src/test/java/io/github/xinfra/lab/raft/confchange/**
+        src/test/java/io/github/xinfra/lab/raft/quorum/**
+        src/test/resources/testdata/**
+
+==============================================================================
+
+Third-party dependencies (license tags are summaries; refer to each artifact's
+LICENSE for authoritative terms):
+
+  * Google Protocol Buffers (protobuf-java)             -- BSD-3-Clause
+        https://github.com/protocolbuffers/protobuf
+  * SLF4J API                                           -- MIT
+        https://www.slf4j.org/
+  * (test only) JUnit 5                                 -- EPL-2.0
+        https://junit.org/junit5/
+  * (test only) AssertJ                                 -- Apache-2.0
+        https://assertj.github.io/doc/
+  * (test only) jqwik                                   -- EPL-2.0
+        https://jqwik.net/
+  * (test only) JMH                                     -- GPLv2 with Classpath
+        https://openjdk.org/projects/code-tools/jmh/
+  * (test only) Logback Classic                         -- EPL-1.0 / LGPL-2.1
+        https://logback.qos.ch/

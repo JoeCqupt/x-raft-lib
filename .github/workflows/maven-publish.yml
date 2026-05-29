@@ -1,0 +1,31 @@
+name: maven-publish
+
+# Manually triggered release: builds, GPG-signs, and uploads the library
+# modules to Maven Central via the Sonatype central-publishing plugin.
+# raft-examples / raft-tests are skipped (maven.deploy.skip + skipPublishing).
+on: workflow_dispatch
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+          server-id: central
+          server-username: CENTRAL_USER
+          server-password: CENTRAL_PASSWD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: GPG_PASSPHRASE
+
+      - name: Maven deploy
+        run: mvn -U -B -ntp deploy -Prelease
+        env:
+          CENTRAL_USER: ${{ secrets.CENTRAL_USER }}
+          CENTRAL_PASSWD: ${{ secrets.CENTRAL_PASSWD }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}

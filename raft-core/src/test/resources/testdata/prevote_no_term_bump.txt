@@ -1,0 +1,97 @@
+# PreVote scenario.
+# A partitioned follower campaigns repeatedly. Without PreVote it would bump
+# its term every election timeout, disrupting the cluster when it rejoins.
+# With PreVote, the term stays put because the PreVote requests can't reach
+# the cluster (partition) and the follower keeps trying without ever entering
+# real Candidate state — its term stays at the original value, so when the
+# partition heals there is no spurious leader step-down.
+
+add-nodes id=1,2,3 voters=1,2,3 prevote=true
+----
+INFO 1 switched to configuration voters=(1 2 3)
+INFO 1 became follower at term 0
+INFO 2 switched to configuration voters=(1 2 3)
+INFO 2 became follower at term 0
+INFO 3 switched to configuration voters=(1 2 3)
+INFO 3 became follower at term 0
+
+campaign id=1
+----
+INFO 1 is starting a new election
+INFO 1 became StatePreCandidate at term 0
+
+stabilize
+----
+> 1 handling Ready: state=StatePreCandidate term=0 commit=0
+> 2 receiving MsgRequestPreVote from 1
+> 2 handling Ready: state=StateFollower term=0 commit=0
+> 3 receiving MsgRequestPreVote from 1
+> 3 handling Ready: state=StateFollower term=0 commit=0
+> 1 receiving MsgRequestPreVoteResponse from 2
+> 1 receiving MsgRequestPreVoteResponse from 3
+> 1 handling Ready: state=StateCandidate term=1 commit=0
+> 2 receiving MsgRequestVote from 1
+> 2 handling Ready: state=StateFollower term=1 commit=0
+> 3 receiving MsgRequestVote from 1
+> 3 handling Ready: state=StateFollower term=1 commit=0
+> 1 receiving MsgRequestVoteResponse from 2
+> 1 receiving MsgRequestVoteResponse from 3
+> 1 handling Ready: state=StateLeader term=1 commit=0
+> 2 receiving MsgAppend from 1
+> 2 handling Ready: state=StateFollower term=1 commit=0
+> 3 receiving MsgAppend from 1
+> 3 handling Ready: state=StateFollower term=1 commit=0
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 3
+> 1 handling Ready: state=StateLeader term=1 commit=1
+> 2 receiving MsgAppend from 1
+> 2 handling Ready: state=StateFollower term=1 commit=1
+> 3 receiving MsgAppend from 1
+> 3 handling Ready: state=StateFollower term=1 commit=1
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 3
+
+status id=1
+----
+id=1 state=StateLeader term=1 lead=1 commit=1 lastIndex=1
+
+# Partition node 3 (drop everything from/to it).
+drop-msgs id=3
+----
+
+# Node 3 campaigns — it must enter PreCandidate, send PreVotes that get
+# dropped, and never increment term to 2.
+campaign id=3
+----
+INFO 3 is starting a new election
+INFO 3 became StatePreCandidate at term 1
+
+# Run a Ready so PreVote messages are emitted, then drop them on the way out.
+process-ready id=3
+----
+> 3 handling Ready: state=StatePreCandidate term=1 commit=1
+
+drop-msgs id=1
+----
+> 1 dropping MsgRequestPreVote from 3
+
+drop-msgs id=2
+----
+> 2 dropping MsgRequestPreVote from 3
+
+# Term must still be 1 (PreVote never bumped it).
+status id=3
+----
+id=3 state=StatePreCandidate term=1 lead=0 commit=1 lastIndex=1
+
+# Heal: messages flow again. Node 3 catches up as a regular follower.
+stabilize
+----
+
+status id=1
+----
+id=1 state=StateLeader term=1 lead=1 commit=1 lastIndex=1
+
+status id=3
+----
+id=3 state=StatePreCandidate term=1 lead=0 commit=1 lastIndex=1

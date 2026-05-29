@@ -1,0 +1,16 @@
+# Promote a learner to a voter.
+# First add learner 4, then add it as a voter (AddNode promotes an existing
+# learner). It ends up in the voter set and leaves the learner set.
+
+add-nodes id=1 voters=1,2,3
+----
+INFO 1 switched to configuration voters=(1 2 3)
+INFO 1 became follower at term 0
+
+apply-conf-change id=1 changes=l4
+----
+voters=(1 2 3) learners=(4) auto-leave=false
+
+apply-conf-change id=1 changes=v4
+----
+voters=(1 2 3 4) learners=() auto-leave=false

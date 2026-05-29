@@ -1,0 +1,26 @@
+# Build output
+target/
+
+# IDE — IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# IDE — Eclipse / VS Code
+.classpath
+.project
+.settings/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# jqwik property-test database
+.jqwik-database
+
+# flatten-maven-plugin output (release profile)
+.flattened-pom.xml

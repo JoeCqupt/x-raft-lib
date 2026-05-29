@@ -1,0 +1,39 @@
+# Inspect the log contents of a single-node leader after a couple of
+# proposals. log-state lists every retained entry as term/index; with no
+# compaction, firstIndex is 1 and all entries are at term 1.
+
+add-nodes id=1 voters=1
+----
+INFO 1 switched to configuration voters=(1)
+INFO 1 became follower at term 0
+
+campaign id=1
+----
+INFO 1 is starting a new election
+INFO 1 became StateCandidate at term 1
+
+stabilize
+----
+> 1 handling Ready: state=StateCandidate term=1 commit=0
+> 1 handling Ready: state=StateLeader term=1 commit=0
+> 1 handling Ready: state=StateLeader term=1 commit=1
+
+propose id=1 data=p1
+----
+ok
+
+propose id=1 data=p2
+----
+ok
+
+stabilize
+----
+> 1 handling Ready: state=StateLeader term=1 commit=1
+> 1 handling Ready: state=StateLeader term=1 commit=3
+
+log-state id=1
+----
+id=1 firstIndex=1 lastIndex=3 committed=3 applied=3
+  1/1
+  1/2
+  1/3

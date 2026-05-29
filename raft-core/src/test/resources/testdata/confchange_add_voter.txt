@@ -1,0 +1,12 @@
+# Simple (non-joint) conf change: add a voter.
+# A single voter addition uses the simple protocol, so there is no joint
+# config and auto-leave is false.
+
+add-nodes id=1 voters=1
+----
+INFO 1 switched to configuration voters=(1)
+INFO 1 became follower at term 0
+
+apply-conf-change id=1 changes=v2
+----
+voters=(1 2) learners=() auto-leave=false

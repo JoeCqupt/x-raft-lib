@@ -1,0 +1,15 @@
+# Remove a voter, then add it back.
+# Two sequential simple changes; the config returns to the original voter set.
+
+add-nodes id=1 voters=1,2,3
+----
+INFO 1 switched to configuration voters=(1 2 3)
+INFO 1 became follower at term 0
+
+apply-conf-change id=1 changes=r3
+----
+voters=(1 2) learners=() auto-leave=false
+
+apply-conf-change id=1 changes=v3
+----
+voters=(1 2 3) learners=() auto-leave=false

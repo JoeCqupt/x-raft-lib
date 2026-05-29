@@ -1,0 +1,40 @@
+# Single-node cluster commits a batch of proposals in one stabilize round.
+# Verifies that several entries appended before a Ready all commit together
+# (quorum is the node itself), and indices/commit advance accordingly.
+
+add-nodes id=1 voters=1
+----
+INFO 1 switched to configuration voters=(1)
+INFO 1 became follower at term 0
+
+campaign id=1
+----
+INFO 1 is starting a new election
+INFO 1 became StateCandidate at term 1
+
+stabilize
+----
+> 1 handling Ready: state=StateCandidate term=1 commit=0
+> 1 handling Ready: state=StateLeader term=1 commit=0
+> 1 handling Ready: state=StateLeader term=1 commit=1
+
+propose id=1 data=a
+----
+ok
+
+propose id=1 data=b
+----
+ok
+
+propose id=1 data=c
+----
+ok
+
+stabilize
+----
+> 1 handling Ready: state=StateLeader term=1 commit=1
+> 1 handling Ready: state=StateLeader term=1 commit=4
+
+status id=1
+----
+id=1 state=StateLeader term=1 lead=1 commit=4 lastIndex=4

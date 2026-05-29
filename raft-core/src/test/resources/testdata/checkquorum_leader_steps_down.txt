@@ -1,0 +1,113 @@
+# CheckQuorum scenario.
+# A leader that loses contact with a quorum of followers must step down to
+# follower after one election timeout, so that the followers can elect a new
+# leader without waiting for the partitioned leader to come back.
+
+add-nodes id=1,2,3 voters=1,2,3 checkquorum=true
+----
+INFO 1 switched to configuration voters=(1 2 3)
+INFO 1 became follower at term 0
+INFO 2 switched to configuration voters=(1 2 3)
+INFO 2 became follower at term 0
+INFO 3 switched to configuration voters=(1 2 3)
+INFO 3 became follower at term 0
+
+campaign id=1
+----
+INFO 1 is starting a new election
+INFO 1 became StateCandidate at term 1
+
+stabilize
+----
+> 1 handling Ready: state=StateCandidate term=1 commit=0
+> 2 receiving MsgRequestVote from 1
+> 2 handling Ready: state=StateFollower term=1 commit=0
+> 3 receiving MsgRequestVote from 1
+> 3 handling Ready: state=StateFollower term=1 commit=0
+> 1 receiving MsgRequestVoteResponse from 2
+> 1 receiving MsgRequestVoteResponse from 3
+> 1 handling Ready: state=StateLeader term=1 commit=0
+> 2 receiving MsgAppend from 1
+> 2 handling Ready: state=StateFollower term=1 commit=0
+> 3 receiving MsgAppend from 1
+> 3 handling Ready: state=StateFollower term=1 commit=0
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 3
+> 1 handling Ready: state=StateLeader term=1 commit=1
+> 2 receiving MsgAppend from 1
+> 2 handling Ready: state=StateFollower term=1 commit=1
+> 3 receiving MsgAppend from 1
+> 3 handling Ready: state=StateFollower term=1 commit=1
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 3
+
+status id=1
+----
+id=1 state=StateLeader term=1 lead=1 commit=1 lastIndex=1
+
+# Drop everything: leader 1 can't hear from followers (simulate partition
+# where 1 is isolated from 2 and 3).
+drop-msgs id=2
+----
+
+drop-msgs id=3
+----
+
+# Tick past one election timeout on the leader so CheckQuorum fires.
+tick-election id=1
+----
+ok
+
+# Drain any messages 1 produced (heartbeats) then drop them too.
+process-ready id=1
+----
+> 1 handling Ready: state=StateFollower term=1 commit=1
+
+drop-msgs id=2
+----
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+> 2 dropping MsgHeartbeat from 1
+
+drop-msgs id=3
+----
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+> 3 dropping MsgHeartbeat from 1
+
+# Leader should have stepped down to follower.
+status id=1
+----
+id=1 state=StateFollower term=1 lead=0 commit=1 lastIndex=1

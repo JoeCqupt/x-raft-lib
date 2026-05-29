@@ -1,0 +1,11 @@
+# Simple conf change: remove a voter from a 3-voter config.
+# Single removal -> simple protocol, auto-leave false, voter set shrinks to two.
+
+add-nodes id=1 voters=1,2,3
+----
+INFO 1 switched to configuration voters=(1 2 3)
+INFO 1 became follower at term 0
+
+apply-conf-change id=1 changes=r3
+----
+voters=(1 2) learners=() auto-leave=false

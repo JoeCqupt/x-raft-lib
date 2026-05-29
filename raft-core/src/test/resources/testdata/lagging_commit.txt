@@ -1,0 +1,132 @@
+# Port of etcd-raft's lagging_commit.txt.
+#
+# Tests that after a network blip drops a follower's ack, the leader's NEXT
+# MsgApp to that follower carries the new commit index even if no new entries
+# need replication — so the follower's commit catches up via heartbeats or
+# subsequent appends instead of waiting for the next proposal.
+#
+# Without this (etcd's canBumpCommit logic, mirrored in Java at
+# Raft.stepLeader's MsgAppendResponse handler), a follower's commit would lag
+# indefinitely until a new entry arrives.
+
+add-nodes id=1,2,3 voters=1,2,3
+----
+INFO 1 switched to configuration voters=(1 2 3)
+INFO 1 became follower at term 0
+INFO 2 switched to configuration voters=(1 2 3)
+INFO 2 became follower at term 0
+INFO 3 switched to configuration voters=(1 2 3)
+INFO 3 became follower at term 0
+
+campaign id=1
+----
+INFO 1 is starting a new election
+INFO 1 became StateCandidate at term 1
+
+stabilize
+----
+> 1 handling Ready: state=StateCandidate term=1 commit=0
+> 2 receiving MsgRequestVote from 1
+> 2 handling Ready: state=StateFollower term=1 commit=0
+> 3 receiving MsgRequestVote from 1
+> 3 handling Ready: state=StateFollower term=1 commit=0
+> 1 receiving MsgRequestVoteResponse from 2
+> 1 receiving MsgRequestVoteResponse from 3
+> 1 handling Ready: state=StateLeader term=1 commit=0
+> 2 receiving MsgAppend from 1
+> 2 handling Ready: state=StateFollower term=1 commit=0
+> 3 receiving MsgAppend from 1
+> 3 handling Ready: state=StateFollower term=1 commit=0
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 3
+> 1 handling Ready: state=StateLeader term=1 commit=1
+> 2 receiving MsgAppend from 1
+> 2 handling Ready: state=StateFollower term=1 commit=1
+> 3 receiving MsgAppend from 1
+> 3 handling Ready: state=StateFollower term=1 commit=1
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 3
+
+# Propose 2 entries on the leader.
+propose id=1 data=data1
+----
+ok
+
+propose id=1 data=data2
+----
+ok
+
+# Leader produces the broadcast MsgApp; route them into the followers'
+# inboxes via the leader's Ready cycle.
+process-ready id=1
+----
+> 1 handling Ready: state=StateLeader term=1 commit=1
+
+# Both followers deliver, append, and send MsgAppResp.
+deliver-msgs id=2
+----
+> 2 receiving MsgAppend from 1
+> 2 receiving MsgAppend from 1
+
+process-ready id=2
+----
+> 2 handling Ready: state=StateFollower term=1 commit=1
+
+deliver-msgs id=3
+----
+> 3 receiving MsgAppend from 1
+> 3 receiving MsgAppend from 1
+
+process-ready id=3
+----
+> 3 handling Ready: state=StateFollower term=1 commit=1
+
+# Now simulate a network blip: ONLY deliver follower 2's response to the
+# leader (drop follower 3's). The leader will hit quorum {1, 2} and commit.
+deliver-msgs id=1 from=2
+----
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 2
+
+# Drop 3's pending MsgAppResp.
+drop-msgs id=1 from=3
+----
+> 1 dropping MsgAppendResponse from 3
+> 1 dropping MsgAppendResponse from 3
+
+# Leader processes Ready: it now has commit=4 (no-op + data1 + data2 + 1
+# bootstrap = 4 entries) and broadcasts a new MsgApp carrying that commit
+# index to BOTH followers (even though 3 hasn't acked the entries).
+process-ready id=1
+----
+> 1 handling Ready: state=StateLeader term=1 commit=3
+
+# Status check: leader has commit=4, follower 2 caught up via the latest
+# MsgApp, follower 3 still has commit=1 (the old commit from before).
+status id=1
+----
+id=1 state=StateLeader term=1 lead=1 commit=3 lastIndex=3
+
+status id=2
+----
+id=2 state=StateFollower term=1 lead=1 commit=1 lastIndex=3
+
+status id=3
+----
+id=3 state=StateFollower term=1 lead=1 commit=1 lastIndex=3
+
+# Deliver 3's pending MsgApp (with the new commit index 4) — it should now
+# catch up without needing a new propose.
+deliver-msgs id=3
+----
+> 3 receiving MsgAppend from 1
+> 3 receiving MsgAppend from 1
+
+process-ready id=3
+----
+> 3 handling Ready: state=StateFollower term=1 commit=3
+
+# Verify 3's commit is now 4.
+status id=3
+----
+id=3 state=StateFollower term=1 lead=1 commit=3 lastIndex=3

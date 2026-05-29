@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel in-progress runs on the same ref when a new commit lands.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build & test (JDK ${{ matrix.jdk }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        jdk: ['17', '21']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.jdk }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.jdk }}
+          cache: maven
+
+      - name: Show versions
+        run: |
+          java -version
+          mvn -v
+
+      - name: Build & test (multi-module reactor)
+        # `install` so module-to-module dependencies resolve from the
+        # local repo. Surefire runs every module's tests; JaCoCo's check
+        # goal enforces the coverage gate on raft-core (other modules
+        # don't yet have gates).
+        run: mvn -B -ntp install
+
+      - name: Upload JaCoCo HTML report (raft-core)
+        if: always() && matrix.jdk == '17'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-raft-core
+          path: raft-core/target/site/jacoco/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload Surefire XMLs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-jdk${{ matrix.jdk }}
+          path: '**/target/surefire-reports/'
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Coverage summary
+        if: success() && matrix.jdk == '17'
+        # Re-derive headline coverage from the CSV so it appears in the
+        # workflow Summary tab without an external service.
+        run: |
+          awk -F, 'NR>1 { ic_m+=$4; ic_c+=$5; br_m+=$6; br_c+=$7; ln_m+=$8; ln_c+=$9 }
+          END {
+            ic_t=ic_m+ic_c; br_t=br_m+br_c; ln_t=ln_m+ln_c
+            printf "## raft-core coverage\n\n"
+            printf "| Metric | Covered | Total | %% |\n"
+            printf "|--------|--------:|------:|---:|\n"
+            printf "| Instructions | %d | %d | %.1f%% |\n", ic_c, ic_t, ic_c*100/ic_t
+            printf "| Branches     | %d | %d | %.1f%% |\n", br_c, br_t, br_c*100/br_t
+            printf "| Lines        | %d | %d | %.1f%% |\n", ln_c, ln_t, ln_c*100/ln_t
+          }' raft-core/target/site/jacoco/jacoco.csv >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,45 @@
+# Single-node snapshot + log compaction.
+# After committing entries, take a snapshot at the committed index and compact;
+# firstIndex must advance past the compacted entries while lastIndex/committed
+# stay put.
+
+add-nodes id=1 voters=1
+----
+INFO 1 switched to configuration voters=(1)
+INFO 1 became follower at term 0
+
+campaign id=1
+----
+INFO 1 is starting a new election
+INFO 1 became StateCandidate at term 1
+
+stabilize
+----
+> 1 handling Ready: state=StateCandidate term=1 commit=0
+> 1 handling Ready: state=StateLeader term=1 commit=0
+> 1 handling Ready: state=StateLeader term=1 commit=1
+
+propose id=1 data=x
+----
+ok
+
+propose id=1 data=y
+----
+ok
+
+stabilize
+----
+> 1 handling Ready: state=StateLeader term=1 commit=1
+> 1 handling Ready: state=StateLeader term=1 commit=3
+
+create-snapshot id=1 index=3
+----
+snapshot index=3 term=1
+
+compact id=1 index=3
+----
+compacted to index=3
+
+log-state id=1
+----
+id=1 firstIndex=4 lastIndex=3 committed=3 applied=3

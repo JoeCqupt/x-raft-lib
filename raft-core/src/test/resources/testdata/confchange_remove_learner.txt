@@ -1,0 +1,16 @@
+# Add then remove a learner.
+# Adding learner 4 puts it in the learner set; removing it returns the config
+# to the original three voters with no learners.
+
+add-nodes id=1 voters=1,2,3
+----
+INFO 1 switched to configuration voters=(1 2 3)
+INFO 1 became follower at term 0
+
+apply-conf-change id=1 changes=l4
+----
+voters=(1 2 3) learners=(4) auto-leave=false
+
+apply-conf-change id=1 changes=r4
+----
+voters=(1 2 3) learners=() auto-leave=false

@@ -1,0 +1,67 @@
+# Conf change V2 joint consensus scenario.
+# Apply a JointImplicit transition that promotes node 4 as voter and demotes
+# node 3 to learner, then verify auto-leave back to a single-config state.
+
+add-nodes id=1,2,3 voters=1,2,3
+----
+INFO 1 switched to configuration voters=(1 2 3)
+INFO 1 became follower at term 0
+INFO 2 switched to configuration voters=(1 2 3)
+INFO 2 became follower at term 0
+INFO 3 switched to configuration voters=(1 2 3)
+INFO 3 became follower at term 0
+
+campaign id=1
+----
+INFO 1 is starting a new election
+INFO 1 became StateCandidate at term 1
+
+stabilize
+----
+> 1 handling Ready: state=StateCandidate term=1 commit=0
+> 2 receiving MsgRequestVote from 1
+> 2 handling Ready: state=StateFollower term=1 commit=0
+> 3 receiving MsgRequestVote from 1
+> 3 handling Ready: state=StateFollower term=1 commit=0
+> 1 receiving MsgRequestVoteResponse from 2
+> 1 receiving MsgRequestVoteResponse from 3
+> 1 handling Ready: state=StateLeader term=1 commit=0
+> 2 receiving MsgAppend from 1
+> 2 handling Ready: state=StateFollower term=1 commit=0
+> 3 receiving MsgAppend from 1
+> 3 handling Ready: state=StateFollower term=1 commit=0
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 3
+> 1 handling Ready: state=StateLeader term=1 commit=1
+> 2 receiving MsgAppend from 1
+> 2 handling Ready: state=StateFollower term=1 commit=1
+> 3 receiving MsgAppend from 1
+> 3 handling Ready: state=StateFollower term=1 commit=1
+> 1 receiving MsgAppendResponse from 2
+> 1 receiving MsgAppendResponse from 3
+
+# Apply joint conf change directly (skip propose+commit for brevity).
+# v4 = add as voter; l3 = make learner.
+apply-conf-change id=1 changes=v4,l3
+----
+voters=(1 2 4) learners=() auto-leave=true
+
+# Add node 4 itself so we can drive its inbox.
+add-nodes id=4 voters=1,2,3,4
+----
+INFO 4 switched to configuration voters=(1 2 3 4)
+INFO 4 became follower at term 0
+
+# Verify we're in joint state with auto-leave armed.
+status id=1
+----
+id=1 state=StateLeader term=1 lead=1 commit=1 lastIndex=1
+
+# Empty changes = leave joint.
+apply-conf-change id=1 changes=
+----
+voters=(1 2 4) learners=(3) auto-leave=false
+
+status id=1
+----
+id=1 state=StateLeader term=1 lead=1 commit=1 lastIndex=1
