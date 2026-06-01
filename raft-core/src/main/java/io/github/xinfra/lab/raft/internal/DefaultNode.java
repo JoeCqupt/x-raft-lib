@@ -373,7 +373,12 @@ public class DefaultNode implements Node {
                     pe.result.completeExceptionally(RaftException.ErrStopped);
                 }
             } else if (ev instanceof StatusEvent se) {
-                se.result.complete(null);
+                // Match submitWithResult's stoppedValue: callers expect a
+                // non-null Status (the public API package is @NullMarked).
+                // Returning null here was a latent bug that only surfaced on
+                // Windows / JDK 17 where the scheduler more often picks the
+                // drain path over submitWithResult's done-after-put branch.
+                se.result.complete(Status.empty());
             } else if (ev instanceof ConfChangeEvent cce) {
                 cce.reply.complete(Eraftpb.ConfState.getDefaultInstance());
             }
