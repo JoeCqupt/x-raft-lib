@@ -217,9 +217,13 @@ class RaftSystemTest {
         // Kill node 1.
         s.crash(1);
         s.partition(1);
-        // Tick enough times to exceed the election timeout on followers (10).
-        // electionTimeout is randomized to [10, 20); 30 ticks is safely past.
-        s.run(30);
+        // Tick enough times to exceed the election timeout on followers
+        // (electionTimeout randomised to [10, 20)). A single timeout pass
+        // can split-vote between the two survivors, and the random
+        // back-off can chain a couple of split-vote rounds before
+        // convergence. 100 ticks (≈5x the worst single-timeout) gives
+        // headroom for 2-3 retries without papering over a real wedge.
+        s.run(100);
 
         long newLeader = s.currentLeader();
         assertThat(newLeader).as("a new leader should be elected").isNotZero();
