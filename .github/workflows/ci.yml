@@ -12,11 +12,17 @@ concurrency:
 
 jobs:
   build:
-    name: build & test (JDK ${{ matrix.jdk }})
-    runs-on: ubuntu-latest
+    name: build & test (${{ matrix.os }} / JDK ${{ matrix.jdk }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        # rocksdbjni ships native binaries for linux-x86_64 / linux-aarch64 /
+        # darwin-{x86_64,aarch64} / windows-x86_64; gRPC binds real ports.
+        # We need to exercise all three host OSes, not just linux, to catch
+        # platform-specific drift (path separators, fsync semantics, port
+        # allocation, line endings). macos-latest is arm64 (M1).
+        os: ['ubuntu-latest', 'macos-latest', 'windows-latest']
         jdk: ['17', '21']
 
     steps:
@@ -34,15 +40,20 @@ jobs:
           java -version
           mvn -v
 
+      # The full coverage gate only runs on the canonical platform
+      # (ubuntu / JDK 17) so the other OS jobs aren't paying jacoco's
+      # ~10% overhead and we don't end up with three separate coverage
+      # reports to reconcile. Cross-OS runs still execute every test;
+      # they just skip the instrumentation + check goal.
       - name: Build & test (multi-module reactor)
-        # `install` so module-to-module dependencies resolve from the
-        # local repo. Surefire runs every module's tests; JaCoCo's check
-        # goal enforces the coverage gate on raft-core (other modules
-        # don't yet have gates).
+        if: matrix.os == 'ubuntu-latest' && matrix.jdk == '17'
         run: mvn -B -ntp install
+      - name: Build & test (no jacoco)
+        if: matrix.os != 'ubuntu-latest' || matrix.jdk != '17'
+        run: mvn -B -ntp install -Djacoco.skip=true
 
       - name: Upload JaCoCo HTML report (raft-core)
-        if: always() && matrix.jdk == '17'
+        if: always() && matrix.os == 'ubuntu-latest' && matrix.jdk == '17'
         uses: actions/upload-artifact@v4
         with:
           name: jacoco-raft-core
@@ -54,13 +65,15 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: surefire-jdk${{ matrix.jdk }}
+          # Names must be unique across matrix legs or upload-artifact@v4
+          # rejects the second one with "already exists".
+          name: surefire-${{ matrix.os }}-jdk${{ matrix.jdk }}
           path: '**/target/surefire-reports/'
           retention-days: 7
           if-no-files-found: ignore
 
       - name: Coverage summary
-        if: success() && matrix.jdk == '17'
+        if: success() && matrix.os == 'ubuntu-latest' && matrix.jdk == '17'
         # Re-derive headline coverage from the CSV so it appears in the
         # workflow Summary tab without an external service.
         run: |
