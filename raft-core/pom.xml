@@ -66,6 +66,15 @@
             <artifactId>jqwik</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Coverage-guided fuzzer for the Raft.step() / protobuf parse
+             entry points. Default surefire run executes @FuzzTest as a
+             single-input smoke; the long-running fuzz session is gated
+             behind the `fuzz` profile (see profiles below). -->
+        <dependency>
+            <groupId>com.code-intelligence</groupId>
+            <artifactId>jazzer-junit</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -151,6 +160,32 @@
     </build>
 
     <profiles>
+        <!-- `mvn -P fuzz test -Dtest=*FuzzTest` runs the Jazzer harnesses as a
+             long fuzzing session instead of the per-input smoke that the
+             normal test phase executes. JAZZER_FUZZ=1 puts jazzer-junit into
+             fuzz mode; the suite is scoped via -Dtest=...FuzzTest so the rest
+             of the surefire run isn't slowed down. Designed to be invoked
+             from a nightly CI workflow, not from the inner loop. -->
+        <profile>
+            <id>fuzz</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <environmentVariables>
+                                <JAZZER_FUZZ>1</JAZZER_FUZZ>
+                            </environmentVariables>
+                            <!-- Crashes / OOMs in fuzz mode must fail the
+                                 build but not abort the whole jvm fork. -->
+                            <forkCount>1</forkCount>
+                            <reuseForks>false</reuseForks>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
         <profile>
             <id>release</id>
             <build>

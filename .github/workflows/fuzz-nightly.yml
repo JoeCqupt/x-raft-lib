@@ -1,0 +1,67 @@
+name: fuzz-nightly
+
+# Long-running Jazzer fuzz pass for the protobuf parse boundary and the
+# raft step() entry point. Daily so a regression on a hand-crafted peer
+# message surfaces within 24h instead of waiting for someone to run it
+# manually.
+#
+# Each harness gets a fixed budget; corpus findings (if any) are uploaded
+# as artifacts so the failing input can be replayed locally with:
+#   mvn -P fuzz -pl raft-core test -Dtest=<HarnessName>#<method>
+
+on:
+  schedule:
+    - cron: '23 7 * * *'   # ~07:23 UTC daily (off the :00 hour to avoid GH rate spike)
+  workflow_dispatch:
+
+concurrency:
+  group: fuzz-nightly
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        harness:
+          - EraftpbParseFuzzTest
+          - RaftStepFuzzTest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+
+      # Build the rest of the reactor once so raft-core has its proto
+      # jar installed locally.
+      - name: Install reactor (skip tests)
+        run: mvn -B -ntp -DskipTests -Djacoco.skip=true install
+
+      - name: Fuzz ${{ matrix.harness }}
+        env:
+          # Time budget per harness, in seconds. 10 min is enough to
+          # surface obvious regressions without blowing past the
+          # workflow's 45-min timeout under matrix execution.
+          JAZZER_FUZZ_DURATION_SECONDS: '600'
+        run: |
+          mvn -B -ntp -P fuzz -pl raft-core test \
+              -Dtest='${{ matrix.harness }}' \
+              -DargLine="-Djazzer.duration_seconds=$JAZZER_FUZZ_DURATION_SECONDS"
+
+      - name: Upload corpus on finding
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ matrix.harness }}
+          path: |
+            raft-core/.cifuzz-corpus/
+            raft-core/target/surefire-reports/
+          retention-days: 30
+          if-no-files-found: ignore
