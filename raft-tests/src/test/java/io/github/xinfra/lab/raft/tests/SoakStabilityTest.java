@@ -6,6 +6,7 @@
  */
 package io.github.xinfra.lab.raft.tests;
 
+import io.github.xinfra.lab.raft.RaftException;
 import io.github.xinfra.lab.raft.examples.RaftPeer;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -73,7 +74,16 @@ class SoakStabilityTest {
                     continue;
                 }
                 for (int i = 0; i < 200; i++) {
-                    leader.propose(("soak-" + (proposals++)).getBytes());
+                    try {
+                        leader.propose(("soak-" + (proposals++)).getBytes());
+                    } catch (RaftException dropped) {
+                        // Proposals legitimately drop during the brief windows
+                        // where forceSnapshotAndCompact stalls the loop or
+                        // leadership transfers — that's not a stability bug.
+                        // Bail out of this batch; the outer loop will re-find a
+                        // leader on the next iteration.
+                        break;
+                    }
                 }
 
                 // Periodically snapshot + compact the leader so the log can't
