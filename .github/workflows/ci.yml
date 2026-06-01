@@ -82,6 +82,31 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+      # Single source of coverage truth for downstream tooling (badges, PR
+      # comment, sunburst). Aggregates jacoco.xml from every module that
+      # produces one — raft-core / raft-transport-grpc / raft-storage-rocksdb
+      # — so the Codecov view reflects the full reactor, not just one module.
+      # Scoped to the same ubuntu/JDK17 leg as the local jacoco gate so we
+      # don't double-publish from each matrix cell.
+      #
+      # `token` is supplied via repo secret; for public repos Codecov accepts
+      # tokenless uploads but the action prints a noisy warning, so we keep
+      # the token wired to the optional secret (graceful no-op if unset).
+      - name: Upload coverage to Codecov
+        if: success() && matrix.os == 'ubuntu-latest' && matrix.jdk == '17'
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: >-
+            raft-core/target/site/jacoco/jacoco.xml,
+            raft-transport-grpc/target/site/jacoco/jacoco.xml,
+            raft-storage-rocksdb/target/site/jacoco/jacoco.xml
+          fail_ci_if_error: false
+          # Surface upload errors clearly without breaking the build —
+          # the local jacoco gate is the binding check; Codecov is the
+          # cross-cutting view.
+          verbose: true
+
       - name: Upload Surefire XMLs (on failure)
         if: failure()
         uses: actions/upload-artifact@v4

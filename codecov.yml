@@ -1,0 +1,59 @@
+## Codecov configuration for x-raft-lib.
+##
+## Validate locally with: curl -X POST --data-binary @codecov.yml https://codecov.io/validate
+##
+## The binding coverage check is the per-module JaCoCo gate in each module's
+## pom.xml ({@code mvn install} fails if coverage drops below the floor); this
+## file controls the cross-module Codecov view used for the README badge and
+## the PR comment / status checks. Keep its targets at-or-below the per-module
+## floors so the Codecov status doesn't disagree with the local gate.
+
+codecov:
+  # Wait for at least one upload before publishing a status. With a single
+  # ubuntu/JDK17 upload per CI run, this is effectively a no-op safeguard
+  # against the matrix-leg race where Codecov could publish a partial view.
+  notify:
+    after_n_builds: 1
+    wait_for_ci: true
+  require_ci_to_pass: true
+
+# Tolerate the occasional jacoco.xml glitch (e.g. a module test failure that
+# kills its report) without taking the badge red.
+coverage:
+  precision: 1
+  round: down
+  range: "70...90"
+  status:
+    project:
+      default:
+        # Floor: project-wide coverage must not drop below 75%. The repo-wide
+        # average is held up by raft-core's 85%+ instruction gate; the lower
+        # floor here gives the transport / storage modules room without
+        # making their drift invisible.
+        target: 75%
+        threshold: 1%   # tolerate a 1pp dip per PR before marking red
+        if_ci_failed: error
+    patch:
+      default:
+        # New code in a PR must hit 70% — generous enough that adding a
+        # single defensive try/catch doesn't turn the patch status red, but
+        # tight enough that an untested feature is visible.
+        target: 70%
+        threshold: 1%
+        if_ci_failed: error
+
+# Don't track coverage for generated proto sources or for tests themselves.
+ignore:
+  - "**/proto/**"
+  - "**/generated-sources/**"
+  - "**/src/test/**"
+  - "raft-examples/**"  # demo code; not part of the library surface
+  - "raft-tests/**"     # cross-module integration suite; no jacoco gate yet
+
+# PR comment: tight, single-section table — no sunburst, no flag breakdown.
+comment:
+  layout: "header, diff, files"
+  behavior: default
+  require_changes: true   # only comment when the PR actually moves coverage
+  require_base: false
+  require_head: true
