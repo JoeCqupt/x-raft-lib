@@ -55,10 +55,23 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.jdk == '17'
         shell: bash
         run: mvn -B -ntp install
-      - name: Build & test (no jacoco)
-        if: matrix.os != 'ubuntu-latest' || matrix.jdk != '17'
+      - name: Build & test (no jacoco, full reactor)
+        if: matrix.os != 'windows-latest' && (matrix.os != 'ubuntu-latest' || matrix.jdk != '17')
         shell: bash
         run: mvn -B -ntp install -Djacoco.skip=true
+      # rocksdbjni 10.10.1's Windows native binary is missing JNI bridge
+      # symbols (`UnsatisfiedLink: ColumnFamilyOptions.disposeInternalJni`
+      # and friends), so any module that touches RocksDB fails to even
+      # construct a storage instance. This is a known upstream packaging
+      # issue. Until rocksdb-jvm ships a working windows-x86_64 build, we
+      # skip the rocksdb-tied modules on Windows but still exercise
+      # raft-proto / raft-core / raft-transport-grpc — which is where most
+      # of the platform-specific risk (path separators, fsync semantics,
+      # netty / gRPC port handling) lives anyway.
+      - name: Build & test (Windows; skip rocksdb modules)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: mvn -B -ntp install -Djacoco.skip=true -pl '!raft-storage-rocksdb,!raft-tests,!raft-examples'
 
       - name: Upload JaCoCo HTML report (raft-core)
         if: always() && matrix.os == 'ubuntu-latest' && matrix.jdk == '17'
