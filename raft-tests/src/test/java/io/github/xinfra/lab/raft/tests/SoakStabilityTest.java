@@ -74,7 +74,14 @@ class SoakStabilityTest {
                     Thread.sleep(50);
                     continue;
                 }
-                for (int i = 0; i < 200; i++) {
+                // Smaller per-batch (50) so the firehose doesn't outpace
+                // raft replication on slow CI runners. The earlier 200/batch
+                // piled hundreds of thousands of un-replicated entries in
+                // 60-120s, then the post-firehose drain assertion couldn't
+                // catch up in any reasonable window. 50 keeps the leader's
+                // inflight buffer steady; the soak still spans hundreds of
+                // thousands of commits over a 30-min default run.
+                for (int i = 0; i < 50; i++) {
                     try {
                         leader.propose(("soak-" + (proposals++)).getBytes());
                     } catch (RaftException dropped) {
