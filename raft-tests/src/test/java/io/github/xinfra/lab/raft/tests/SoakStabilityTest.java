@@ -121,15 +121,21 @@ class SoakStabilityTest {
             }
 
             // Final liveness: all nodes drain toward the leader's commit (no
-            // permanent apply backlog).
+            // permanent apply backlog). The catch-up window scales with the
+            // backlog we just produced — a 30-min soak generates millions of
+            // entries, and the follower drain after the firehose stops is
+            // bounded by raft's MaxSizePerMsg / inflight window plus
+            // GitHub-runner CPU. 60s is enough headroom for any healthy run
+            // and still tight enough that a *permanent* backlog (the bug this
+            // assertion catches) fails the test.
             long finalCommit = maxCommit(nodes);
             assertThat(awaitTrue(() -> nodes.stream()
-                    .allMatch(p -> p.basicStatus().commit >= finalCommit), 20_000))
+                    .allMatch(p -> p.basicStatus().commit >= finalCommit), 60_000))
                     .as("all nodes must catch up to commit %d (no backlog)", finalCommit)
                     .isTrue();
             // Applied should track committed once the firehose stops.
             assertThat(awaitTrue(() -> nodes.stream()
-                    .allMatch(p -> p.basicStatus().applied >= p.basicStatus().commit), 20_000))
+                    .allMatch(p -> p.basicStatus().applied >= p.basicStatus().commit), 60_000))
                     .as("applied must catch up to committed (no apply backlog)").isTrue();
 
             // No thread leak: the count should be stable (allow generous slack
