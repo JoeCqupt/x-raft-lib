@@ -25,6 +25,7 @@ import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.awaitLeader
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.awaitTrue;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.chaosPeer;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.findLeader;
+import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.findLeaderOrWait;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.freePorts;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.peerMap;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -96,7 +97,12 @@ class ZeroCopySnapshotStreamingTest {
                 }
             }
 
-            long leaderCommit = findLeader(nodes).basicStatus().commit;
+            // forceSnapshotAndCompact can briefly stall the event loop and
+            // make the incumbent leader step down before re-winning, so wait
+            // past the gap rather than snapshotting the cluster mid-election.
+            RaftPeer leaderAfterCompact = findLeaderOrWait(nodes, 5_000);
+            assertThat(leaderAfterCompact).as("a leader must be visible after snapshot+compact").isNotNull();
+            long leaderCommit = leaderAfterCompact.basicStatus().commit;
 
             chaos.heal(victim);
 
@@ -106,7 +112,9 @@ class ZeroCopySnapshotStreamingTest {
                     .isTrue();
 
             // Inline data is empty on BOTH ends — the bytes never rode in the message.
-            assertThat(findLeader(nodes).storage.snapshot().getData().isEmpty())
+            RaftPeer leaderForInspection = findLeaderOrWait(nodes, 5_000);
+            assertThat(leaderForInspection).as("a leader must be visible for snapshot inspection").isNotNull();
+            assertThat(leaderForInspection.storage.snapshot().getData().isEmpty())
                     .as("leader snapshot must be metadata-only").isTrue();
             assertThat(recovered.storage.snapshot().getData().isEmpty())
                     .as("recovered follower snapshot must be metadata-only").isTrue();

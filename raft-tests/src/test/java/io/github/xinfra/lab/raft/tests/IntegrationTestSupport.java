@@ -109,6 +109,25 @@ final class IntegrationTestSupport {
         return null;
     }
 
+    /**
+     * Polls {@link #findLeader} until a leader appears or {@code waitMillis}
+     * elapses. Use this in tests right after a heavy operation
+     * ({@code forceSnapshotAndCompact}, large propose batch, partition heal)
+     * that can briefly stall the event loop and make the incumbent leader
+     * step down before re-winning election. The plain {@link #findLeader}
+     * snapshot returns null at that exact instant, which then NPEs the
+     * caller — this helper waits past the gap.
+     */
+    static RaftPeer findLeaderOrWait(Iterable<RaftPeer> peers, long waitMillis) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + waitMillis;
+        while (true) {
+            RaftPeer p = findLeader(peers);
+            if (p != null) return p;
+            if (System.currentTimeMillis() >= deadline) return null;
+            Thread.sleep(20);
+        }
+    }
+
     /** Wait until the basicStatus().lead converges to a single non-zero value across all peers. */
     static boolean awaitConvergedLeader(Iterable<RaftPeer> peers, long timeoutMillis) throws InterruptedException {
         return awaitTrue(() -> {

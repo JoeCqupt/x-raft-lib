@@ -45,11 +45,19 @@ jobs:
       # ~10% overhead and we don't end up with three separate coverage
       # reports to reconcile. Cross-OS runs still execute every test;
       # they just skip the instrumentation + check goal.
+      #
+      # `shell: bash` is set explicitly because GitHub Actions defaults
+      # to PowerShell on windows-latest, and PowerShell tokenises
+      # `-Djacoco.skip=true` as `-D jacoco.skip=true`, making Maven
+      # treat ".skip=true" as a phase. Git Bash is preinstalled on
+      # windows-latest, so bash works on every leg of the matrix.
       - name: Build & test (multi-module reactor)
         if: matrix.os == 'ubuntu-latest' && matrix.jdk == '17'
+        shell: bash
         run: mvn -B -ntp install
       - name: Build & test (no jacoco)
         if: matrix.os != 'ubuntu-latest' || matrix.jdk != '17'
+        shell: bash
         run: mvn -B -ntp install -Djacoco.skip=true
 
       - name: Upload JaCoCo HTML report (raft-core)
