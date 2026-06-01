@@ -140,15 +140,16 @@ public class InteractionEnv {
             mb.setConfState(cb);
             s.setSnapshot(s.getSnapshot().toBuilder().setMetadata(mb).build());
 
-            Config cfg = new Config();
-            cfg.id = id;
-            cfg.electionTick = electionTick;
-            cfg.heartbeatTick = heartbeatTick;
-            cfg.storage = s;
-            cfg.maxSizePerMsg = Long.MAX_VALUE;
-            cfg.maxInflightMsgs = inflight;
-            cfg.preVote = preVote;
-            cfg.checkQuorum = checkQuorum;
+            Config cfg = Config.builder()
+                    .id(id)
+                    .electionTick(electionTick)
+                    .heartbeatTick(heartbeatTick)
+                    .storage(s)
+                    .maxSizePerMsg(Long.MAX_VALUE)
+                    .maxInflightMsgs(inflight)
+                    .preVote(preVote)
+                    .checkQuorum(checkQuorum)
+                    .build();
 
             RawNode rn = RawNode.newRawNode(cfg);
             nodes.put(id, new NodeContext(id, s, rn));
@@ -442,15 +443,15 @@ public class InteractionEnv {
                 ctx.rn.raft.raftLog.committed));
         // Apply snapshot to storage FIRST (mirrors how a real app handles
         // Ready: snapshot install → entries append → message send → advance).
-        if (rd.snapshot != null && !Util.isEmptySnap(rd.snapshot)) {
+        if (rd.snapshot() != null && !Util.isEmptySnap(rd.snapshot())) {
             try {
-                ctx.storage.applySnapshot(rd.snapshot);
+                ctx.storage.applySnapshot(rd.snapshot());
             } catch (RaftException e) {
                 out.append(String.format("> %d applySnapshot error: %s%n", ctx.id, e));
             }
         }
-        if (!rd.entries.isEmpty()) ctx.storage.append(rd.entries);
-        for (Eraftpb.Message m : rd.messages) {
+        if (!rd.entries().isEmpty()) ctx.storage.append(rd.entries());
+        for (Eraftpb.Message m : rd.messages()) {
             NodeContext target = nodes.get(m.getTo());
             if (target != null && target != ctx) {
                 target.inbox.add(m);

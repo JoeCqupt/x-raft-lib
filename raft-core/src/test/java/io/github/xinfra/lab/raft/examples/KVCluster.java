@@ -79,19 +79,20 @@ public class KVCluster {
                 throw new RuntimeException(e);
             }
 
-            Config cfg = new Config();
-            cfg.id = id;
-            cfg.electionTick = 10;
-            cfg.heartbeatTick = 1;
-            cfg.storage = storage;
-            cfg.maxSizePerMsg = Long.MAX_VALUE;
-            cfg.maxInflightMsgs = 256;
+            Config cfg = Config.builder()
+                    .id(id)
+                    .electionTick(10)
+                    .heartbeatTick(1)
+                    .storage(storage)
+                    .maxSizePerMsg(Long.MAX_VALUE)
+                    .maxInflightMsgs(256)
+                    .build();
             this.rn = RawNode.newRawNode(cfg);
         }
 
         /** Public read-only check: is this node currently the raft leader? */
         public boolean isLeader() {
-            return rn.basicStatus().softState.raftState() == RaftStateType.StateLeader;
+            return rn.basicStatus().softState().raftState() == RaftStateType.StateLeader;
         }
     }
 
@@ -169,21 +170,21 @@ public class KVCluster {
 
     private void handleReady(Node n) throws RaftException {
         Ready rd = n.rn.ready();
-        if (!rd.entries.isEmpty()) n.storage.append(rd.entries);
-        if (rd.snapshot != null && !Util.isEmptySnap(rd.snapshot)) {
-            try { n.storage.applySnapshot(rd.snapshot); }
+        if (!rd.entries().isEmpty()) n.storage.append(rd.entries());
+        if (rd.snapshot() != null && !Util.isEmptySnap(rd.snapshot())) {
+            try { n.storage.applySnapshot(rd.snapshot()); }
             catch (RaftException e) { throw new RuntimeException(e); }
         }
         // Apply committed entries to the state machine. EntryNormal with
         // non-empty data is a KV command; empty payload (leader's no-op
         // post-election) is ignored.
-        for (Eraftpb.Entry e : rd.committedEntries) {
+        for (Eraftpb.Entry e : rd.committedEntries()) {
             if (e.getEntryType() == Eraftpb.EntryType.EntryNormal && !e.getData().isEmpty()) {
                 KVStore.Command cmd = KVStore.Command.deserialize(e.getData().toByteArray());
                 n.kvStore.applyCommand(e.getIndex(), cmd);
             }
         }
-        for (Eraftpb.Message m : rd.messages) {
+        for (Eraftpb.Message m : rd.messages()) {
             Node target = nodes.get(m.getTo());
             if (target != null && target != n) target.inbox.add(m);
         }

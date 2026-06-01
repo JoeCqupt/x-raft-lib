@@ -84,20 +84,21 @@ public class RaftBenchmarks {
         mb.setConfState(cb);
         storage.setSnapshot(storage.getSnapshot().toBuilder().setMetadata(mb).build());
 
-        Config cfg = new Config();
-        cfg.id = 1;
-        cfg.electionTick = 10;
-        cfg.heartbeatTick = 1;
-        cfg.storage = storage;
-        cfg.maxSizePerMsg = Long.MAX_VALUE;
-        cfg.maxInflightMsgs = 1024;
+        Config cfg = Config.builder()
+                .id(1)
+                .electionTick(10)
+                .heartbeatTick(1)
+                .storage(storage)
+                .maxSizePerMsg(Long.MAX_VALUE)
+                .maxInflightMsgs(1024)
+                .build();
 
         rn = RawNode.newRawNode(cfg);
         rn.campaign();
         // Drain Readys until we are leader.
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (!rd.entries.isEmpty()) storage.append(rd.entries);
+            if (!rd.entries().isEmpty()) storage.append(rd.entries());
             rn.advance(rd);
         }
 
@@ -120,7 +121,7 @@ public class RaftBenchmarks {
     public Ready proposeAndDrain() throws RaftException {
         rn.propose(payload);
         Ready rd = rn.ready();
-        if (!rd.entries.isEmpty()) storage.append(rd.entries);
+        if (!rd.entries().isEmpty()) storage.append(rd.entries());
         rn.advance(rd);
         return rd;
     }

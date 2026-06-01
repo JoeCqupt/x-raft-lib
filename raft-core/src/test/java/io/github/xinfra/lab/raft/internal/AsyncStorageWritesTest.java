@@ -53,16 +53,17 @@ class AsyncStorageWritesTest {
     /**
      * Async mode contract: Ready.entries is still populated (for backward
      * compatibility with sync mode), but the authoritative copy that the app
-     * should persist is in the MsgStorageAppend message in rd.messages. They
+     * should persist is in the MsgStorageAppend message in rd.messages(). They
      * carry the same payload. Mirrors etcd-raft's docstring on Ready.Entries.
      */
     @Test
     void asyncReadyAlsoEmitsMsgStorageAppend() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
-        cfg.asyncStorageWrites = true;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .asyncStorageWrites(true)
+                .build();
 
         RawNode rn = RawNode.newRawNode(cfg);
         rn.campaign();
@@ -77,20 +78,20 @@ class AsyncStorageWritesTest {
 
         // Verify there is exactly one MsgStorageAppend addressed to the local
         // append thread, with the propose payload in its entries.
-        List<Eraftpb.Message> appends = filter(rd.messages, Eraftpb.MessageType.MsgStorageAppend);
+        List<Eraftpb.Message> appends = filter(rd.messages(), Eraftpb.MessageType.MsgStorageAppend);
         assertThat(appends).as("async: a MsgStorageAppend message is emitted").hasSize(1);
         Eraftpb.Message append = appends.get(0);
         assertThat(append.getTo()).isEqualTo(Util.LOCAL_APPEND_THREAD);
 
-        // Find the "payload" entry in either rd.entries or the MsgStorageAppend.
+        // Find the "payload" entry in either rd.entries() or the MsgStorageAppend.
         // Either is acceptable per etcd-raft contract; we just want to confirm
         // it isn't lost.
         boolean foundInAppend = append.getEntriesList().stream()
                 .anyMatch(e -> "payload".equals(e.getData().toStringUtf8()));
-        boolean foundInRd = rd.entries.stream()
+        boolean foundInRd = rd.entries().stream()
                 .anyMatch(e -> "payload".equals(e.getData().toStringUtf8()));
         assertThat(foundInAppend || foundInRd)
-                .as("payload is reachable via either rd.entries or MsgStorageAppend").isTrue();
+                .as("payload is reachable via either rd.entries() or MsgStorageAppend").isTrue();
     }
 
     /**
@@ -105,10 +106,11 @@ class AsyncStorageWritesTest {
     @Test
     void asyncProposeAppliesViaStorageRoundTrip() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
-        cfg.asyncStorageWrites = true;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .asyncStorageWrites(true)
+                .build();
 
         RawNode rn = RawNode.newRawNode(cfg);
         rn.campaign();
@@ -123,11 +125,11 @@ class AsyncStorageWritesTest {
             if (!rn.hasReady()) break;
             Ready rd = rn.ready();
             // Persist entries / snapshot to storage.
-            if (!rd.entries.isEmpty()) s.append(rd.entries);
+            if (!rd.entries().isEmpty()) s.append(rd.entries());
             // Process each outgoing message: MsgStorage{Append,Apply} are
             // delivered to the simulated local append/apply threads (their
             // responses are attached, deliver them straight back to raft).
-            for (Eraftpb.Message m : rd.messages) {
+            for (Eraftpb.Message m : rd.messages()) {
                 if (m.getMsgType() == Eraftpb.MessageType.MsgStorageAppend) {
                     // The app "writes" then delivers each attached Response.
                     for (Eraftpb.Message resp : m.getResponsesList()) {
@@ -168,13 +170,14 @@ class AsyncStorageWritesTest {
     @Test
     void advanceInAsyncModeThrows() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
-        cfg.asyncStorageWrites = true;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .asyncStorageWrites(true)
+                .build();
         RawNode rn = RawNode.newRawNode(cfg);
 
-        Ready rd = rn.hasReady() ? rn.ready() : new Ready();
+        Ready rd = rn.hasReady() ? rn.ready() : Ready.empty();
         try {
             rn.advance(rd);
             org.junit.jupiter.api.Assertions.fail("advance() must throw in async mode");
@@ -194,8 +197,8 @@ class AsyncStorageWritesTest {
         for (int iter = 0; iter < 50; iter++) {
             if (!rn.hasReady()) break;
             Ready rd = rn.ready();
-            if (!rd.entries.isEmpty()) s.append(rd.entries);
-            for (Eraftpb.Message m : rd.messages) {
+            if (!rd.entries().isEmpty()) s.append(rd.entries());
+            for (Eraftpb.Message m : rd.messages()) {
                 if (m.getMsgType() == Eraftpb.MessageType.MsgStorageAppend
                         || m.getMsgType() == Eraftpb.MessageType.MsgStorageApply) {
                     for (Eraftpb.Message resp : m.getResponsesList()) {
@@ -211,12 +214,12 @@ class AsyncStorageWritesTest {
      * handle messages itself for inspection.
      */
     private static Ready drainOneReady(RawNode rn, MemoryStorage s) throws Exception {
-        if (!rn.hasReady()) return new Ready();
+        if (!rn.hasReady()) return Ready.empty();
         Ready rd = rn.ready();
-        if (!rd.entries.isEmpty()) s.append(rd.entries);
+        if (!rd.entries().isEmpty()) s.append(rd.entries());
         // Deliver MsgStorageAppend responses to keep state consistent, but
         // don't loop — caller wants to see this exact Ready.
-        for (Eraftpb.Message m : rd.messages) {
+        for (Eraftpb.Message m : rd.messages()) {
             if (m.getMsgType() == Eraftpb.MessageType.MsgStorageAppend
                     || m.getMsgType() == Eraftpb.MessageType.MsgStorageApply) {
                 for (Eraftpb.Message resp : m.getResponsesList()) {
@@ -249,10 +252,11 @@ class AsyncStorageWritesTest {
         AsyncNode(long id, long... voters) {
             this.id = id;
             this.storage = newTestMemoryStorage(withPeers(voters));
-            Config cfg = newTestConfig(id, 10, 1, storage);
-            cfg.maxSizePerMsg = NO_LIMIT;
-            cfg.maxInflightMsgs = 256;
-            cfg.asyncStorageWrites = true;
+            Config cfg = newTestConfig(id, 10, 1, storage).toBuilder()
+                    .maxSizePerMsg(NO_LIMIT)
+                    .maxInflightMsgs(256)
+                    .asyncStorageWrites(true)
+                    .build();
             this.rn = RawNode.newRawNode(cfg);
         }
     }
@@ -379,12 +383,12 @@ class AsyncStorageWritesTest {
                 }
                 if (n.rn.hasReady()) {
                     Ready rd = n.rn.ready();
-                    if (!rd.entries.isEmpty()) n.storage.append(rd.entries);
-                    if (rd.snapshot != null && !Util.isEmptySnap(rd.snapshot)) {
-                        try { n.storage.applySnapshot(rd.snapshot); }
+                    if (!rd.entries().isEmpty()) n.storage.append(rd.entries());
+                    if (rd.snapshot() != null && !Util.isEmptySnap(rd.snapshot())) {
+                        try { n.storage.applySnapshot(rd.snapshot()); }
                         catch (RaftException ex) { throw new RuntimeException(ex); }
                     }
-                    for (Eraftpb.Message m : rd.messages) {
+                    for (Eraftpb.Message m : rd.messages()) {
                         if (m.getMsgType() == Eraftpb.MessageType.MsgStorageAppend
                                 || m.getMsgType() == Eraftpb.MessageType.MsgStorageApply) {
                             // Local message: persist already happened above;

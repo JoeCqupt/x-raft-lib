@@ -54,12 +54,12 @@ public class RawNode {
 
     /** Tick advances the internal logical clock by a single tick. */
     public void tick() {
-        raft.tickFn.run();
+        raft.tick();
     }
 
     /** TickQuiesced advances the internal logical clock without other processing. */
     public void tickQuiesced() {
-        raft.electionElapsed++;
+        raft.incrementElectionElapsed();
     }
 
     /**
@@ -82,7 +82,7 @@ public class RawNode {
     /** Propose proposes data be appended to the raft log. */
     public void propose(byte[] data) throws RaftException {
         stepLocal(Eraftpb.MessageType.MsgPropose, mb -> mb
-                .setFrom(raft.id)
+                .setFrom(raft.id())
                 .addEntries(Eraftpb.Entry.newBuilder()
                         .setData(data != null ? ByteString.copyFrom(data) : ByteString.EMPTY)));
     }
@@ -113,7 +113,7 @@ public class RawNode {
             throw RaftException.ErrStepLocalMsg;
         }
         if (Util.isResponseMsg(m.getMsgType()) && !Util.isLocalMsgTarget(m.getFrom()) &&
-            raft.trk.getProgress().get(m.getFrom()) == null) {
+            raft.tracker().getProgress().get(m.getFrom()) == null) {
             throw RaftException.ErrStepPeerNotFound;
         }
         raft.step(m);
@@ -129,7 +129,7 @@ public class RawNode {
     public Ready readyWithoutAccept() {
         Raft r = raft;
 
-        Ready rd = new Ready();
+        Ready.Builder b = Ready.builder();
         // Defensive copies: nextUnstableEnts() returns a subList view of the
         // unstable entries buffer; if the caller (or any step inside the
         // Ready cycle, e.g. async-mode MsgStorageAppendResp triggering
@@ -137,64 +137,76 @@ public class RawNode {
         // ConcurrentModificationException on later access. Same caveat
         // applies to nextCommittedEnts() when its entries come from the
         // unstable buffer.
-        List<Eraftpb.Entry> unstableEnts = r.raftLog.nextUnstableEnts();
-        rd.entries = unstableEnts != null ? new ArrayList<>(unstableEnts) : new ArrayList<>();
-        List<Eraftpb.Entry> committedEnts = r.raftLog.nextCommittedEnts(applyUnstableEntries());
-        rd.committedEntries = committedEnts != null ? new ArrayList<>(committedEnts) : new ArrayList<>();
-        rd.messages = new ArrayList<>(r.msgs);
+        List<Eraftpb.Entry> unstableEnts = r.raftLog().nextUnstableEnts();
+        List<Eraftpb.Entry> entries = unstableEnts != null ? new ArrayList<>(unstableEnts) : new ArrayList<>();
+        b.entries(entries);
+        List<Eraftpb.Entry> committedEnts = r.raftLog().nextCommittedEnts(applyUnstableEntries());
+        List<Eraftpb.Entry> committedEntries = committedEnts != null ? new ArrayList<>(committedEnts) : new ArrayList<>();
+        b.committedEntries(committedEntries);
+        List<Eraftpb.Message> messages = new ArrayList<>(r.msgs());
+        b.messages(messages);
 
         SoftState softSt = r.softState();
         if (!softSt.equals(prevSoftSt)) {
-            rd.softState = softSt;
+            b.softState(softSt);
         }
         Eraftpb.HardState hardSt = r.hardState();
         if (!Util.isHardStateEqual(hardSt, prevHardSt)) {
-            rd.hardState = hardSt;
+            b.hardState(hardSt);
         }
-        if (r.raftLog.hasNextUnstableSnapshot()) {
-            rd.snapshot = r.raftLog.nextUnstableSnapshot();
+        if (r.raftLog().hasNextUnstableSnapshot()) {
+            b.snapshot(r.raftLog().nextUnstableSnapshot());
         }
-        if (!r.readStates.isEmpty()) {
-            rd.readStates = new ArrayList<>(r.readStates);
+        if (!r.readStates().isEmpty()) {
+            b.readStates(new ArrayList<>(r.readStates()));
         }
-        rd.mustSync = Util.mustSync(r.hardState(), prevHardSt, rd.entries.size());
+        b.mustSync(Util.mustSync(r.hardState(), prevHardSt, entries.size()));
+
+        // The async-storage-writes path appends synthetic local messages to
+        // the messages list AFTER the rest of the snapshot is captured; build
+        // the Ready first, then re-build with the appended messages. The
+        // intermediate {@code Ready} is only used to feed the helper functions
+        // that read final fields like {@code hardState} / {@code snapshot} /
+        // {@code committedEntries}.
+        Ready rd = b.build();
 
         if (asyncStorageWrites) {
             if (needStorageAppendMsg(r, rd)) {
-                Eraftpb.Message m = newStorageAppendMsg(r, rd);
-                rd.messages.add(m);
+                messages.add(newStorageAppendMsg(r, rd));
             }
             if (needStorageApplyMsg(rd)) {
-                Eraftpb.Message m = newStorageApplyMsg(r, rd);
-                rd.messages.add(m);
+                messages.add(newStorageApplyMsg(r, rd));
             }
         } else {
-            for (Eraftpb.Message m : r.msgsAfterAppend) {
-                if (m.getTo() != r.id) {
-                    rd.messages.add(m);
+            for (Eraftpb.Message m : r.msgsAfterAppend()) {
+                if (m.getTo() != r.id()) {
+                    messages.add(m);
                 }
             }
         }
 
+        // {@code messages} above is the same instance held by {@code rd}, so
+        // the appends already mutated it. Returning {@code rd} is fine — the
+        // record's outward view is final once handed back to the caller.
         return rd;
     }
 
     public void acceptReady(Ready rd) {
-        if (rd.softState != null) {
-            prevSoftSt = rd.softState;
+        if (rd.softState() != null) {
+            prevSoftSt = rd.softState();
         }
-        if (!Util.isEmptyHardState(rd.hardState)) {
-            prevHardSt = rd.hardState;
+        if (!Util.isEmptyHardState(rd.hardState())) {
+            prevHardSt = rd.hardState();
         }
-        if (!rd.readStates.isEmpty()) {
-            raft.readStates = new ArrayList<>();
+        if (!rd.readStates().isEmpty()) {
+            raft.resetReadStates();
         }
         if (!asyncStorageWrites) {
             if (!stepsOnAdvance.isEmpty()) {
                 throw new RaftInvariantException("two accepted Ready structs without call to Advance");
             }
-            for (Eraftpb.Message m : raft.msgsAfterAppend) {
-                if (m.getTo() == raft.id) {
+            for (Eraftpb.Message m : raft.msgsAfterAppend()) {
+                if (m.getTo() == raft.id()) {
                     stepsOnAdvance.add(m);
                 }
             }
@@ -202,15 +214,15 @@ public class RawNode {
                 stepsOnAdvance.add(newStorageAppendRespMsg(raft, rd));
             }
             if (needStorageApplyRespMsg(rd)) {
-                stepsOnAdvance.add(newStorageApplyRespMsg(raft, rd.committedEntries));
+                stepsOnAdvance.add(newStorageApplyRespMsg(raft, rd.committedEntries()));
             }
         }
-        raft.msgs = new ArrayList<>();
-        raft.msgsAfterAppend = new ArrayList<>();
-        raft.raftLog.acceptUnstable();
-        if (!rd.committedEntries.isEmpty()) {
-            long index = rd.committedEntries.get(rd.committedEntries.size() - 1).getIndex();
-            raft.raftLog.acceptApplying(index, Util.entsSize(rd.committedEntries), applyUnstableEntries());
+        raft.drainMsgs();
+        raft.drainMsgsAfterAppend();
+        raft.raftLog().acceptUnstable();
+        if (!rd.committedEntries().isEmpty()) {
+            long index = rd.committedEntries().get(rd.committedEntries().size() - 1).getIndex();
+            raft.raftLog().acceptApplying(index, Util.entsSize(rd.committedEntries()), applyUnstableEntries());
         }
 
         StateTrace.traceReady(raft);
@@ -230,16 +242,16 @@ public class RawNode {
         if (!Util.isEmptyHardState(hardSt) && !Util.isHardStateEqual(hardSt, prevHardSt)) {
             return true;
         }
-        if (r.raftLog.hasNextUnstableSnapshot()) {
+        if (r.raftLog().hasNextUnstableSnapshot()) {
             return true;
         }
-        if (!r.msgs.isEmpty() || !r.msgsAfterAppend.isEmpty()) {
+        if (!r.msgs().isEmpty() || !r.msgsAfterAppend().isEmpty()) {
             return true;
         }
-        if (r.raftLog.hasNextUnstableEnts() || r.raftLog.hasNextCommittedEnts(applyUnstableEntries())) {
+        if (r.raftLog().hasNextUnstableEnts() || r.raftLog().hasNextCommittedEnts(applyUnstableEntries())) {
             return true;
         }
-        if (!r.readStates.isEmpty()) {
+        if (!r.readStates().isEmpty()) {
             return true;
         }
         return false;
@@ -262,7 +274,7 @@ public class RawNode {
                 raft.step(stepsOnAdvance.get(i));
             } catch (RaftException e) {
                 LOG.error("node {} unexpected RaftException replaying {} in advance(): {}",
-                        raft.id, stepsOnAdvance.get(i).getMsgType(), e);
+                        raft.id(), stepsOnAdvance.get(i).getMsgType(), e);
             }
             stepsOnAdvance.set(i, Eraftpb.Message.getDefaultInstance());
         }
@@ -291,7 +303,7 @@ public class RawNode {
      * WithProgress is a helper to introspect the Progress for this node and its peers.
      */
     public void withProgress(ProgressVisitor visitor) {
-        raft.trk.visit((id, pr) -> {
+        raft.tracker().visit((id, pr) -> {
             ProgressType typ = pr.isLearner() ? ProgressType.ProgressTypeLearner : ProgressType.ProgressTypePeer;
             visitor.visit(id, typ, pr);
         });
@@ -308,7 +320,7 @@ public class RawNode {
         try {
             stepLocal(Eraftpb.MessageType.MsgUnreachable, mb -> mb.setFrom(id));
         } catch (RaftException e) {
-            LOG.error("node {} unexpected RaftException from MsgUnreachable: {}", raft.id, e);
+            LOG.error("node {} unexpected RaftException from MsgUnreachable: {}", raft.id(), e);
         }
     }
 
@@ -318,7 +330,7 @@ public class RawNode {
         try {
             stepLocal(Eraftpb.MessageType.MsgSnapStatus, mb -> mb.setFrom(id).setReject(rej));
         } catch (RaftException e) {
-            LOG.error("node {} unexpected RaftException from MsgSnapStatus: {}", raft.id, e);
+            LOG.error("node {} unexpected RaftException from MsgSnapStatus: {}", raft.id(), e);
         }
     }
 
@@ -327,7 +339,7 @@ public class RawNode {
         try {
             stepLocal(Eraftpb.MessageType.MsgTransferLeader, mb -> mb.setFrom(transferee));
         } catch (RaftException e) {
-            LOG.error("node {} unexpected RaftException from MsgTransferLeader: {}", raft.id, e);
+            LOG.error("node {} unexpected RaftException from MsgTransferLeader: {}", raft.id(), e);
         }
     }
 
@@ -343,7 +355,7 @@ public class RawNode {
                     .addEntries(Eraftpb.Entry.newBuilder()
                             .setData(rctx != null ? ByteString.copyFrom(rctx) : ByteString.EMPTY)));
         } catch (RaftException e) {
-            LOG.error("node {} unexpected RaftException from MsgReadIndex: {}", raft.id, e);
+            LOG.error("node {} unexpected RaftException from MsgReadIndex: {}", raft.id(), e);
         }
     }
 
@@ -352,7 +364,7 @@ public class RawNode {
         if (peers.isEmpty()) {
             throw new IllegalArgumentException("must provide at least one peer to Bootstrap");
         }
-        long lastIndex = raft.raftLog.storage.lastIndex();
+        long lastIndex = raft.raftLog().storage.lastIndex();
         if (lastIndex != 0) {
             throw new IllegalStateException("can't bootstrap a nonempty Storage");
         }
@@ -375,8 +387,8 @@ public class RawNode {
                     .setData(cc.toByteString())
                     .build());
         }
-        raft.raftLog.append(ents);
-        raft.raftLog.committed = ents.size();
+        raft.raftLog().append(ents);
+        raft.raftLog().committed = ents.size();
         for (Peer peer : peers) {
             Eraftpb.ConfChangeV2 ccv2 = Eraftpb.ConfChangeV2.newBuilder()
                     .addChanges(Eraftpb.ConfChangeSingle.newBuilder()
@@ -389,32 +401,32 @@ public class RawNode {
 
     // ============= AsyncStorageWrites helpers =============
     static boolean needStorageAppendMsg(Raft r, Ready rd) {
-        return !rd.entries.isEmpty() ||
-                !Util.isEmptyHardState(rd.hardState) ||
-                !Util.isEmptySnap(rd.snapshot) ||
-                !r.msgsAfterAppend.isEmpty();
+        return !rd.entries().isEmpty() ||
+                !Util.isEmptyHardState(rd.hardState()) ||
+                !Util.isEmptySnap(rd.snapshot()) ||
+                !r.msgsAfterAppend().isEmpty();
     }
 
     static boolean needStorageAppendRespMsg(Raft r, Ready rd) {
-        return r.raftLog.hasNextOrInProgressUnstableEnts() ||
-                !Util.isEmptySnap(rd.snapshot);
+        return r.raftLog().hasNextOrInProgressUnstableEnts() ||
+                !Util.isEmptySnap(rd.snapshot());
     }
 
     static Eraftpb.Message newStorageAppendMsg(Raft r, Ready rd) {
         Eraftpb.Message.Builder mb = Eraftpb.Message.newBuilder()
                 .setMsgType(Eraftpb.MessageType.MsgStorageAppend)
                 .setTo(Util.LOCAL_APPEND_THREAD)
-                .setFrom(r.id)
-                .addAllEntries(rd.entries);
-        if (!Util.isEmptyHardState(rd.hardState)) {
-            mb.setTerm(rd.hardState.getTerm());
-            mb.setVote(rd.hardState.getVote());
-            mb.setCommit(rd.hardState.getCommit());
+                .setFrom(r.id())
+                .addAllEntries(rd.entries());
+        if (!Util.isEmptyHardState(rd.hardState())) {
+            mb.setTerm(rd.hardState().getTerm());
+            mb.setVote(rd.hardState().getVote());
+            mb.setCommit(rd.hardState().getCommit());
         }
-        if (!Util.isEmptySnap(rd.snapshot)) {
-            mb.setSnapshot(rd.snapshot);
+        if (!Util.isEmptySnap(rd.snapshot())) {
+            mb.setSnapshot(rd.snapshot());
         }
-        mb.addAllResponses(r.msgsAfterAppend);
+        mb.addAllResponses(r.msgsAfterAppend());
         if (needStorageAppendRespMsg(r, rd)) {
             mb.addResponses(newStorageAppendRespMsg(r, rd));
         }
@@ -424,22 +436,22 @@ public class RawNode {
     static Eraftpb.Message newStorageAppendRespMsg(Raft r, Ready rd) {
         Eraftpb.Message.Builder mb = Eraftpb.Message.newBuilder()
                 .setMsgType(Eraftpb.MessageType.MsgStorageAppendResp)
-                .setTo(r.id)
+                .setTo(r.id())
                 .setFrom(Util.LOCAL_APPEND_THREAD)
-                .setTerm(r.term);
-        if (r.raftLog.hasNextOrInProgressUnstableEnts()) {
-            EntryID last = r.raftLog.lastEntryID();
+                .setTerm(r.term());
+        if (r.raftLog().hasNextOrInProgressUnstableEnts()) {
+            EntryID last = r.raftLog().lastEntryID();
             mb.setIndex(last.index());
             mb.setLogTerm(last.term());
         }
-        if (!Util.isEmptySnap(rd.snapshot)) {
-            mb.setSnapshot(rd.snapshot);
+        if (!Util.isEmptySnap(rd.snapshot())) {
+            mb.setSnapshot(rd.snapshot());
         }
         return mb.build();
     }
 
     static boolean needStorageApplyMsg(Ready rd) {
-        return !rd.committedEntries.isEmpty();
+        return !rd.committedEntries().isEmpty();
     }
 
     static boolean needStorageApplyRespMsg(Ready rd) {
@@ -450,17 +462,17 @@ public class RawNode {
         return Eraftpb.Message.newBuilder()
                 .setMsgType(Eraftpb.MessageType.MsgStorageApply)
                 .setTo(Util.LOCAL_APPLY_THREAD)
-                .setFrom(r.id)
+                .setFrom(r.id())
                 .setTerm(0)
-                .addAllEntries(rd.committedEntries)
-                .addResponses(newStorageApplyRespMsg(r, rd.committedEntries))
+                .addAllEntries(rd.committedEntries())
+                .addResponses(newStorageApplyRespMsg(r, rd.committedEntries()))
                 .build();
     }
 
     static Eraftpb.Message newStorageApplyRespMsg(Raft r, List<Eraftpb.Entry> ents) {
         return Eraftpb.Message.newBuilder()
                 .setMsgType(Eraftpb.MessageType.MsgStorageApplyResp)
-                .setTo(r.id)
+                .setTo(r.id())
                 .setFrom(Util.LOCAL_APPLY_THREAD)
                 .setTerm(0)
                 .addAllEntries(ents)

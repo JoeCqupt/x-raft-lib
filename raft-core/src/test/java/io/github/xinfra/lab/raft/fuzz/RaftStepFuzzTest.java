@@ -53,7 +53,7 @@ class RaftStepFuzzTest {
     @FuzzTest
     void leaderStepArbitraryMessage(FuzzedDataProvider data) throws RaftException {
         RawNode rn = newLeader();
-        Eraftpb.Message msg = synthesize(data, rn.raft.id);
+        Eraftpb.Message msg = synthesize(data, rn.raft.id());
         try {
             rn.step(msg);
         } catch (RaftException expected) {
@@ -69,11 +69,12 @@ class RaftStepFuzzTest {
     @FuzzTest
     void followerStepArbitraryMessage(FuzzedDataProvider data) throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1, 2, 3));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         RawNode rn = RawNode.newRawNode(cfg);
-        Eraftpb.Message msg = synthesize(data, rn.raft.id);
+        Eraftpb.Message msg = synthesize(data, rn.raft.id());
         try {
             rn.step(msg);
         } catch (RaftException expected) {
@@ -85,16 +86,17 @@ class RaftStepFuzzTest {
 
     private static RawNode newLeader() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         RawNode rn = RawNode.newRawNode(cfg);
         rn.bootstrap(List.of(new Peer(1)));
         rn.campaign();
         // Drain the election Ready so r.state == Leader.
         if (rn.hasReady()) {
             var rd = rn.ready();
-            s.append(rd.entries);
+            s.append(rd.entries());
             rn.advance(rd);
         }
         return rn;

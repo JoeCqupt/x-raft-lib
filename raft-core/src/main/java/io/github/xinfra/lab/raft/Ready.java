@@ -16,6 +16,7 @@
 package io.github.xinfra.lab.raft;
 
 import io.github.xinfra.lab.raft.proto.Eraftpb;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Collections;
 import java.util.List;
@@ -23,56 +24,80 @@ import java.util.List;
 /**
  * Ready encapsulates the entries and messages that are ready to read,
  * be saved to stable storage, committed or sent to other peers.
+ *
+ * <p><b>Immutable.</b> Constructed exclusively by {@link RawNode#ready()}
+ * (or via the package-private {@link Builder} for tests). Hosts must NOT
+ * mutate the returned lists; this is enforced by returning unmodifiable
+ * views via the canonical accessors.
  */
-public class Ready {
-    /**
-     * The current volatile state of a Node.
-     * SoftState will be null if there is no update.
-     */
-    public SoftState softState;
+public record Ready(
+        /** The current volatile state of a Node. {@code null} means no update. */
+        @Nullable SoftState softState,
+        /** State to be saved to stable storage BEFORE messages are sent. */
+        Eraftpb.HardState hardState,
+        /** ReadStates can be used by the host to serve linearizable reads locally. */
+        List<ReadState> readStates,
+        /** Entries to be saved to stable storage BEFORE messages are sent. */
+        List<Eraftpb.Entry> entries,
+        /** Snapshot to be saved to stable storage. */
+        Eraftpb.Snapshot snapshot,
+        /** Entries to be committed to a store / state-machine. */
+        List<Eraftpb.Entry> committedEntries,
+        /** Outbound messages. */
+        List<Eraftpb.Message> messages,
+        /** True iff hardState and entries must be durably synced before send. */
+        boolean mustSync) {
 
     /**
-     * The current state of a Node to be saved to stable storage BEFORE
-     * Messages are sent.
+     * Sentinel "no work pending" Ready. All collections are empty,
+     * {@code hardState} / {@code snapshot} are protobuf defaults,
+     * {@code mustSync} is false. Useful when {@link RawNode#hasReady()} is
+     * false but the call site wants a non-null reference.
      */
-    public Eraftpb.HardState hardState;
+    public static Ready empty() {
+        return new Ready(
+                null,
+                Eraftpb.HardState.getDefaultInstance(),
+                Collections.emptyList(),
+                Collections.emptyList(),
+                Eraftpb.Snapshot.getDefaultInstance(),
+                Collections.emptyList(),
+                Collections.emptyList(),
+                false);
+    }
+
+    public static Builder builder() {
+        return new Builder();
+    }
 
     /**
-     * ReadStates can be used for node to serve linearizable read requests locally.
+     * Mutable builder used by {@link RawNode#readyWithoutAccept()} to assemble
+     * a {@link Ready} field-by-field as it walks the raft state machine. Hosts
+     * should not need to construct {@code Ready} directly — read it from
+     * {@code rn.ready()}.
      */
-    public List<ReadState> readStates;
+    public static final class Builder {
+        @Nullable SoftState softState;
+        Eraftpb.HardState hardState = Eraftpb.HardState.getDefaultInstance();
+        List<ReadState> readStates = Collections.emptyList();
+        List<Eraftpb.Entry> entries = Collections.emptyList();
+        Eraftpb.Snapshot snapshot = Eraftpb.Snapshot.getDefaultInstance();
+        List<Eraftpb.Entry> committedEntries = Collections.emptyList();
+        List<Eraftpb.Message> messages = Collections.emptyList();
+        boolean mustSync;
 
-    /**
-     * Entries specifies entries to be saved to stable storage BEFORE Messages are sent.
-     */
-    public List<Eraftpb.Entry> entries;
+        public Builder softState(@Nullable SoftState v) { this.softState = v; return this; }
+        public Builder hardState(Eraftpb.HardState v) { this.hardState = v; return this; }
+        public Builder readStates(List<ReadState> v) { this.readStates = v; return this; }
+        public Builder entries(List<Eraftpb.Entry> v) { this.entries = v; return this; }
+        public Builder snapshot(Eraftpb.Snapshot v) { this.snapshot = v; return this; }
+        public Builder committedEntries(List<Eraftpb.Entry> v) { this.committedEntries = v; return this; }
+        public Builder messages(List<Eraftpb.Message> v) { this.messages = v; return this; }
+        public Builder mustSync(boolean v) { this.mustSync = v; return this; }
 
-    /**
-     * Snapshot specifies the snapshot to be saved to stable storage.
-     */
-    public Eraftpb.Snapshot snapshot;
-
-    /**
-     * CommittedEntries specifies entries to be committed to a store/state-machine.
-     */
-    public List<Eraftpb.Entry> committedEntries;
-
-    /**
-     * Messages specifies outbound messages.
-     */
-    public List<Eraftpb.Message> messages;
-
-    /**
-     * MustSync indicates whether the HardState and Entries must be durably written to disk.
-     */
-    public boolean mustSync;
-
-    public Ready() {
-        this.hardState = Eraftpb.HardState.getDefaultInstance();
-        this.snapshot = Eraftpb.Snapshot.getDefaultInstance();
-        this.entries = Collections.emptyList();
-        this.committedEntries = Collections.emptyList();
-        this.messages = Collections.emptyList();
-        this.readStates = Collections.emptyList();
+        public Ready build() {
+            return new Ready(softState, hardState, readStates, entries, snapshot,
+                    committedEntries, messages, mustSync);
+        }
     }
 }

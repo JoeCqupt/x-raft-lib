@@ -60,10 +60,11 @@ class TraceEventTest {
     void initStateAndFollowerEmittedOnBoot() throws RaftException {
         RecordingTraceLogger trace = new RecordingTraceLogger();
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
-        cfg.traceLogger = trace;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .traceLogger(trace)
+                .build();
 
         Raft.newRaft(cfg);
 
@@ -87,10 +88,11 @@ class TraceEventTest {
     void electionAndProposalEmitsExpectedTraceSequence() throws Exception {
         RecordingTraceLogger trace = new RecordingTraceLogger();
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
-        cfg.traceLogger = trace;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .traceLogger(trace)
+                .build();
 
         RawNode rn = RawNode.newRawNode(cfg);
         // Clear bootstrap events.
@@ -110,7 +112,7 @@ class TraceEventTest {
         // triggers BecomeLeader and the leader's no-op append.
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (!rd.entries.isEmpty()) s.append(rd.entries);
+            if (!rd.entries().isEmpty()) s.append(rd.entries());
             rn.advance(rd);
         }
         types = trace.types();
@@ -176,16 +178,17 @@ class TraceEventTest {
     void confChangeEmitsChangeConfAndApplyConfChange() throws Exception {
         RecordingTraceLogger trace = new RecordingTraceLogger();
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
-        cfg.traceLogger = trace;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .traceLogger(trace)
+                .build();
 
         RawNode rn = RawNode.newRawNode(cfg);
         rn.campaign();
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (!rd.entries.isEmpty()) s.append(rd.entries);
+            if (!rd.entries().isEmpty()) s.append(rd.entries());
             rn.advance(rd);
         }
 
@@ -203,7 +206,7 @@ class TraceEventTest {
         // Drain Ready then apply: ApplyConfChange must fire.
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (!rd.entries.isEmpty()) s.append(rd.entries);
+            if (!rd.entries().isEmpty()) s.append(rd.entries());
             rn.advance(rd);
         }
         trace.events.clear();
@@ -215,10 +218,11 @@ class TraceEventTest {
 
     private static Raft makeRaft(long id, TraceLogger trace, long... voters) {
         MemoryStorage s = newTestMemoryStorage(withPeers(voters));
-        Config cfg = newTestConfig(id, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
-        cfg.traceLogger = trace;
+        Config cfg = newTestConfig(id, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .traceLogger(trace)
+                .build();
         return Raft.newRaft(cfg);
     }
 }

@@ -75,6 +75,7 @@
         <jqwik.version>1.9.2</jqwik.version>
         <jmh.version>1.37</jmh.version>
         <jazzer.version>0.30.0</jazzer.version>
+        <jspecify.version>1.0.0</jspecify.version>
         <!-- Test-only: lets netty's SelfSignedCertificate generate certs on
              JDK 15+, where its built-in OpenJDK generator no longer works. -->
         <bouncycastle.version>1.78.1</bouncycastle.version>
@@ -169,6 +170,11 @@
                 <groupId>com.code-intelligence</groupId>
                 <artifactId>jazzer-junit</artifactId>
                 <version>${jazzer.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jspecify</groupId>
+                <artifactId>jspecify</artifactId>
+                <version>${jspecify.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

@@ -80,13 +80,14 @@ class RaftSystemTest {
                 mb.setConfState(cb);
                 s.setSnapshot(s.getSnapshot().toBuilder().setMetadata(mb).build());
 
-                Config cfg = new Config();
-                cfg.id = id;
-                cfg.electionTick = 10;
-                cfg.heartbeatTick = 1;
-                cfg.storage = s;
-                cfg.maxSizePerMsg = Long.MAX_VALUE;
-                cfg.maxInflightMsgs = 256;
+                Config cfg = Config.builder()
+                        .id(id)
+                        .electionTick(10)
+                        .heartbeatTick(1)
+                        .storage(s)
+                        .maxSizePerMsg(Long.MAX_VALUE)
+                        .maxInflightMsgs(256)
+                        .build();
 
                 nodes.put(id, new Node(id, s, RawNode.newRawNode(cfg)));
             }
@@ -112,11 +113,11 @@ class RaftSystemTest {
                     }
                     if (n.rn.hasReady()) {
                         Ready rd = n.rn.ready();
-                        if (!rd.entries.isEmpty()) n.storage.append(rd.entries);
-                        for (Eraftpb.Entry e : rd.committedEntries) {
+                        if (!rd.entries().isEmpty()) n.storage.append(rd.entries());
+                        for (Eraftpb.Entry e : rd.committedEntries()) {
                             n.committedHistory.add(e);
                         }
-                        for (Eraftpb.Message m : rd.messages) {
+                        for (Eraftpb.Message m : rd.messages()) {
                             deliver(n, m);
                         }
                         n.rn.advance(rd);

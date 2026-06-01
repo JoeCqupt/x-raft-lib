@@ -126,14 +126,18 @@ public class TestUtil {
     }
 
     public static Config newTestConfig(long id, int election, int heartbeat, Storage storage) {
-        Config c = new Config();
-        c.id = id;
-        c.electionTick = election;
-        c.heartbeatTick = heartbeat;
-        c.storage = storage;
-        c.maxSizePerMsg = NO_LIMIT;
-        c.maxInflightMsgs = 256;
-        return c;
+        return newTestConfigBuilder(id, election, heartbeat, storage).build();
+    }
+
+    /** Builder variant — for tests that need to tweak fields beyond the defaults. */
+    public static Config.Builder newTestConfigBuilder(long id, int election, int heartbeat, Storage storage) {
+        return Config.builder()
+                .id(id)
+                .electionTick(election)
+                .heartbeatTick(heartbeat)
+                .storage(storage)
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256);
     }
 
     public static Raft newTestRaft(long id, int election, int heartbeat, Storage storage) {

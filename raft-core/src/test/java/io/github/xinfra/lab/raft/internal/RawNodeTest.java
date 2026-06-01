@@ -67,8 +67,8 @@ class RawNodeTest {
         RawNode rn = RawNode.newRawNode(newTestConfig(1, 10, 1, storage));
         Ready rd = rn.ready();
         // Should commit up to commit index in st
-        assertThat(rd.committedEntries).hasSize(1);
-        assertThat(rd.committedEntries.get(0).getIndex()).isEqualTo(1);
+        assertThat(rd.committedEntries()).hasSize(1);
+        assertThat(rd.committedEntries().get(0).getIndex()).isEqualTo(1);
         rn.advance(rd);
         assertThat(rn.hasReady()).isFalse();
     }
@@ -92,8 +92,8 @@ class RawNodeTest {
         s.append(entries);
         RawNode rn = RawNode.newRawNode(newTestConfig(1, 10, 1, s));
         Ready rd = rn.ready();
-        assertThat(rd.committedEntries).hasSize(1);
-        assertThat(rd.committedEntries.get(0).getIndex()).isEqualTo(3);
+        assertThat(rd.committedEntries()).hasSize(1);
+        assertThat(rd.committedEntries().get(0).getIndex()).isEqualTo(3);
         rn.advance(rd);
         assertThat(rn.hasReady()).isFalse();
     }
@@ -105,7 +105,7 @@ class RawNodeTest {
         rn.campaign();
 
         Ready rd = rn.ready();
-        s.append(rd.entries);
+        s.append(rd.entries());
         rn.advance(rd);
 
         assertThat(rn.raft.state).isEqualTo(RaftStateType.StateLeader);
@@ -120,13 +120,13 @@ class RawNodeTest {
 
         // Become leader
         Ready rd = rn.ready();
-        s.append(rd.entries);
+        s.append(rd.entries());
         rn.advance(rd);
 
         // Drain committed entries from election
         while (rn.hasReady()) {
             rd = rn.ready();
-            if (rd.entries != null && !rd.entries.isEmpty()) s.append(rd.entries);
+            if (rd.entries() != null && !rd.entries().isEmpty()) s.append(rd.entries());
             rn.advance(rd);
         }
 
@@ -140,8 +140,8 @@ class RawNodeTest {
         boolean found = false;
         while (rn.hasReady()) {
             rd = rn.ready();
-            if (rd.entries != null && !rd.entries.isEmpty()) s.append(rd.entries);
-            for (Eraftpb.Entry e : rd.committedEntries) {
+            if (rd.entries() != null && !rd.entries().isEmpty()) s.append(rd.entries());
+            for (Eraftpb.Entry e : rd.committedEntries()) {
                 if (e.getEntryType() == Eraftpb.EntryType.EntryConfChange) {
                     found = true;
                     Eraftpb.ConfChange parsedCC = Eraftpb.ConfChange.parseFrom(e.getData());
@@ -165,7 +165,7 @@ class RawNodeTest {
         // Become leader and drain
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (rd.entries != null && !rd.entries.isEmpty()) s.append(rd.entries);
+            if (rd.entries() != null && !rd.entries().isEmpty()) s.append(rd.entries());
             rn.advance(rd);
         }
 
@@ -176,8 +176,8 @@ class RawNodeTest {
         // Drain
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (rd.entries != null && !rd.entries.isEmpty()) s.append(rd.entries);
-            for (Eraftpb.Entry e : rd.committedEntries) {
+            if (rd.entries() != null && !rd.entries().isEmpty()) s.append(rd.entries());
+            for (Eraftpb.Entry e : rd.committedEntries()) {
                 if (e.getEntryType() == Eraftpb.EntryType.EntryConfChange) {
                     Eraftpb.ConfChange cc2 = Eraftpb.ConfChange.parseFrom(e.getData());
                     rn.applyConfChange(Eraftpb.ConfChangeV2.newBuilder()
@@ -196,8 +196,8 @@ class RawNodeTest {
         // Drain
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (rd.entries != null && !rd.entries.isEmpty()) s.append(rd.entries);
-            for (Eraftpb.Entry e : rd.committedEntries) {
+            if (rd.entries() != null && !rd.entries().isEmpty()) s.append(rd.entries());
+            for (Eraftpb.Entry e : rd.committedEntries()) {
                 if (e.getEntryType() == Eraftpb.EntryType.EntryConfChange) {
                     Eraftpb.ConfChange cc3 = Eraftpb.ConfChange.parseFrom(e.getData());
                     rn.applyConfChange(Eraftpb.ConfChangeV2.newBuilder()
@@ -215,16 +215,17 @@ class RawNodeTest {
     @Test
     void testRawNodeReadIndex() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         RawNode rn = RawNode.newRawNode(cfg);
         rn.campaign();
 
         // Become leader & drain
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (rd.entries != null && !rd.entries.isEmpty()) s.append(rd.entries);
+            if (rd.entries() != null && !rd.entries().isEmpty()) s.append(rd.entries());
             rn.advance(rd);
         }
 
@@ -232,9 +233,9 @@ class RawNodeTest {
         rn.readIndex(ctx);
         assertThat(rn.hasReady()).isTrue();
         Ready rd = rn.ready();
-        assertThat(rd.readStates).isNotNull();
-        assertThat(rd.readStates).isNotEmpty();
-        assertThat(rd.readStates.get(0).requestCtx()).isEqualTo(ctx);
+        assertThat(rd.readStates()).isNotNull();
+        assertThat(rd.readStates()).isNotEmpty();
+        assertThat(rd.readStates().get(0).requestCtx()).isEqualTo(ctx);
         rn.advance(rd);
     }
 
@@ -246,7 +247,7 @@ class RawNodeTest {
         // Drain
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (rd.entries != null && !rd.entries.isEmpty()) s.append(rd.entries);
+            if (rd.entries() != null && !rd.entries().isEmpty()) s.append(rd.entries());
             rn.advance(rd);
         }
 
@@ -288,8 +289,8 @@ class RawNodeTest {
         Eraftpb.ConfState cs = null;
         while (cs == null) {
             Ready rd = rawNode.ready();
-            s.append(rd.entries);
-            for (Eraftpb.Entry ent : rd.committedEntries) {
+            s.append(rd.entries());
+            for (Eraftpb.Entry ent : rd.committedEntries()) {
                 if (ent.getEntryType() == Eraftpb.EntryType.EntryConfChangeV2) {
                     Eraftpb.ConfChangeV2 ccc = Eraftpb.ConfChangeV2.parseFrom(ent.getData());
                     // Force it to step down.
@@ -316,7 +317,7 @@ class RawNodeTest {
 
         // Move the RawNode along. It should not leave joint because it's follower.
         Ready rd = rawNode.readyWithoutAccept();
-        assertThat(rd.entries).isEmpty();
+        assertThat(rd.entries()).isEmpty();
 
         // Make it leader again. It should leave joint automatically after moving apply index.
         rawNode.campaign();
@@ -325,8 +326,8 @@ class RawNodeTest {
         for (int i = 0; i < 10 && !foundAutoLeave; i++) {
             if (!rawNode.hasReady()) break;
             rd = rawNode.ready();
-            s.append(rd.entries);
-            for (Eraftpb.Entry ent : rd.entries) {
+            s.append(rd.entries());
+            for (Eraftpb.Entry ent : rd.entries()) {
                 if (ent.getEntryType() == Eraftpb.EntryType.EntryConfChangeV2) {
                     Eraftpb.ConfChangeV2 cc = Eraftpb.ConfChangeV2.parseFrom(ent.getData());
                     // Auto-leave: empty ConfChangeV2
@@ -363,7 +364,7 @@ class RawNodeTest {
 
         rawNode.campaign();
         Ready rd = rawNode.ready();
-        storage.append(rd.entries);
+        storage.append(rd.entries());
         rawNode.advance(rd);
 
         rawNode.propose("foo".getBytes());
@@ -371,16 +372,16 @@ class RawNodeTest {
 
         rd = rawNode.ready();
         // Should have the empty entry + "foo" entry
-        assertThat(rd.entries).hasSize(2);
-        storage.append(rd.entries);
+        assertThat(rd.entries()).hasSize(2);
+        storage.append(rd.entries());
         rawNode.advance(rd);
 
         assertThat(rawNode.hasReady()).isTrue();
         rd = rawNode.ready();
-        assertThat(rd.entries).isEmpty();
-        assertThat(rd.mustSync).isFalse();
+        assertThat(rd.entries()).isEmpty();
+        assertThat(rd.mustSync()).isFalse();
         // Committed entries should contain the two entries
-        assertThat(rd.committedEntries).hasSize(2);
+        assertThat(rd.committedEntries()).hasSize(2);
         rawNode.advance(rd);
         assertThat(rawNode.hasReady()).isFalse();
     }
@@ -413,9 +414,10 @@ class RawNodeTest {
         }
         s.setEntries(ents);
 
-        Config cfg = newTestConfig(1, 10, 1, s);
         // Set a MaxSizePerMsg that would normally exclude the last entry
-        cfg.maxSizePerMsg = size - ents.get(ents.size() - 1).getSerializedSize() - 1;
+        Config cfg = newTestConfigBuilder(1, 10, 1, s)
+                .maxSizePerMsg(size - ents.get(ents.size() - 1).getSerializedSize() - 1)
+                .build();
 
         // Add an 11th entry
         ents.add(Eraftpb.Entry.newBuilder()
@@ -430,14 +432,14 @@ class RawNodeTest {
         long highestApplied = 0;
         while (highestApplied != 11) {
             Ready rd = rawNode.ready();
-            int n = rd.committedEntries.size();
+            int n = rd.committedEntries().size();
             assertThat(n).as("stopped applying entries at index %d", highestApplied).isGreaterThan(0);
-            long next = rd.committedEntries.get(0).getIndex();
+            long next = rd.committedEntries().get(0).getIndex();
             if (highestApplied != 0) {
                 assertThat(next).as("attempting to apply index %d after index %d, leaving a gap", next, highestApplied)
                         .isEqualTo(highestApplied + 1);
             }
-            highestApplied = rd.committedEntries.get(n - 1).getIndex();
+            highestApplied = rd.committedEntries().get(n - 1).getIndex();
             rawNode.advance(rd);
             rawNode.raft.step(Eraftpb.Message.newBuilder()
                     .setMsgType(Eraftpb.MessageType.MsgHeartbeat)
@@ -460,17 +462,18 @@ class RawNodeTest {
         long maxEntrySize = maxEntries * Util.payloadSize(testEntry);
 
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxUncommittedEntriesSize = maxEntrySize;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxUncommittedEntriesSize(maxEntrySize)
+                .build();
         RawNode rawNode = RawNode.newRawNode(cfg);
 
         // Become the leader and apply empty entry.
         rawNode.campaign();
         while (true) {
             Ready rd = rawNode.ready();
-            s.append(rd.entries);
+            s.append(rd.entries());
             rawNode.advance(rd);
-            if (!rd.committedEntries.isEmpty()) {
+            if (!rd.committedEntries().isEmpty()) {
                 break;
             }
         }
@@ -491,16 +494,16 @@ class RawNodeTest {
 
         // Recover from the partition.
         Ready rd = rawNode.ready();
-        assertThat(rd.entries).hasSize(maxEntries);
-        s.append(rd.entries);
+        assertThat(rd.entries()).hasSize(maxEntries);
+        s.append(rd.entries());
         rawNode.advance(rd);
 
         // Entries are appended, but not applied.
         assertThat(rawNode.raft.uncommittedSize).isEqualTo(maxEntrySize);
 
         rd = rawNode.ready();
-        assertThat(rd.entries).isEmpty();
-        assertThat(rd.committedEntries).hasSize(maxEntries);
+        assertThat(rd.entries()).isEmpty();
+        assertThat(rd.committedEntries()).hasSize(maxEntries);
         rawNode.advance(rd);
 
         assertThat(rawNode.raft.uncommittedSize).isZero();
@@ -523,16 +526,16 @@ class RawNodeTest {
         // Inject first message, make sure it's visible via readyWithoutAccept.
         rn.raft.msgs.add(m1);
         Ready rd = rn.readyWithoutAccept();
-        assertThat(rd.messages).hasSize(1);
-        assertThat(rd.messages.get(0)).isEqualTo(m1);
+        assertThat(rd.messages()).hasSize(1);
+        assertThat(rd.messages().get(0)).isEqualTo(m1);
         assertThat(rn.raft.msgs).hasSize(1);
         assertThat(rn.raft.msgs.get(0)).isEqualTo(m1);
 
         // Now call Ready() which should move the message into the Ready
         rd = rn.ready();
         assertThat(rn.raft.msgs).isEmpty();
-        assertThat(rd.messages).hasSize(1);
-        assertThat(rd.messages.get(0)).isEqualTo(m1);
+        assertThat(rd.messages()).hasSize(1);
+        assertThat(rd.messages().get(0)).isEqualTo(m1);
 
         // Add a message to raft to make sure that Advance() doesn't drop it.
         rn.raft.msgs.add(m2);

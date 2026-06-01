@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 package io.github.xinfra.lab.raft;
-import io.github.xinfra.lab.raft.internal.*;
 
-import io.github.xinfra.lab.raft.proto.Eraftpb;
+import io.github.xinfra.lab.raft.internal.Raft;
+import io.github.xinfra.lab.raft.internal.quorum.JointConfig;
 import io.github.xinfra.lab.raft.internal.tracker.Progress;
 import io.github.xinfra.lab.raft.internal.tracker.ProgressTracker;
 import io.github.xinfra.lab.raft.internal.tracker.StateType;
-import io.github.xinfra.lab.raft.internal.quorum.JointConfig;
+import io.github.xinfra.lab.raft.proto.Eraftpb;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -30,40 +31,69 @@ import java.util.Set;
 
 /**
  * Status contains information about this Raft peer and its view of the system.
- * The Progress is only populated on the leader.
+ * Immutable record. {@link #progress} is only populated when this node is the
+ * leader; otherwise it is {@code null}.
  */
-public class Status {
-    public BasicStatus basicStatus;
-    public TrackerConfig config;
-    public Map<Long, PeerProgress> progress;
+public record Status(
+        BasicStatus basicStatus,
+        TrackerConfig config,
+        @Nullable Map<Long, PeerProgress> progress) {
 
-    public static class BasicStatus {
-        public long id;
-        public Eraftpb.HardState hardState;
-        public SoftState softState;
-        public long applied;
-        public long leadTransferee;
+    /**
+     * Sentinel returned by {@link Node#status()} when the underlying event
+     * loop is stopped or the call is interrupted before the status reaches the
+     * loop. All numeric fields are zero; {@code progress} is null.
+     */
+    public static Status empty() {
+        BasicStatus basic = new BasicStatus(
+                0L,
+                Eraftpb.HardState.getDefaultInstance(),
+                new SoftState(0L, RaftStateType.StateFollower),
+                0L,
+                0L);
+        TrackerConfig cfg = new TrackerConfig(
+                Collections.emptySet(),
+                Collections.emptySet(),
+                Collections.emptySet(),
+                Collections.emptySet(),
+                false);
+        return new Status(basic, cfg, null);
     }
 
+    /**
+     * Subset of {@link Status} that's cheap to compute and never carries the
+     * leader's per-peer {@link PeerProgress} map. Used by callers that just
+     * need term / vote / commit / lead.
+     */
+    public record BasicStatus(
+            long id,
+            Eraftpb.HardState hardState,
+            SoftState softState,
+            long applied,
+            long leadTransferee) {}
+
     public static BasicStatus getBasicStatus(Raft r) {
-        BasicStatus s = new BasicStatus();
-        s.id = r.id;
-        s.leadTransferee = r.leadTransferee;
-        s.hardState = r.hardState();
-        s.softState = r.softState();
-        s.applied = r.raftLog.applied;
-        return s;
+        return new BasicStatus(
+                r.id(),
+                r.hardState(),
+                r.softState(),
+                r.raftLog().applied,
+                r.leadTransferee());
     }
 
     public static Status getStatus(Raft r) {
-        Status s = new Status();
-        s.basicStatus = getBasicStatus(r);
-        if (s.basicStatus.softState.raftState() == RaftStateType.StateLeader) {
-            s.progress = new HashMap<>();
-            r.trk.visit((id, pr) -> s.progress.put(id, toPeerProgress(pr)));
+        BasicStatus basic = getBasicStatus(r);
+        Map<Long, PeerProgress> progress = null;
+        if (basic.softState().raftState() == RaftStateType.StateLeader) {
+            // ProgressTracker.visit invokes the consumer synchronously, so a
+            // local HashMap is fine here — no thread-safety guard required.
+            // We freeze it via copyOf so the published Status is immutable.
+            Map<Long, PeerProgress> mutable = new HashMap<>();
+            r.tracker().visit((id, pr) -> mutable.put(id, toPeerProgress(pr)));
+            progress = Map.copyOf(mutable);
         }
-        s.config = toTrackerConfig(r.trk.getConfig());
-        return s;
+        TrackerConfig cfg = toTrackerConfig(r.tracker().getConfig());
+        return new Status(basic, cfg, progress);
     }
 
     private static PeerProgress toPeerProgress(Progress pr) {
@@ -111,13 +141,13 @@ public class Status {
     public String toJson() {
         StringBuilder j = new StringBuilder();
         j.append(String.format("{\"id\":\"%x\",\"term\":%d,\"vote\":\"%x\",\"commit\":%d,\"lead\":\"%x\",\"raftState\":\"%s\",\"applied\":%d,\"progress\":{",
-                basicStatus.id,
-                basicStatus.hardState.getTerm(),
-                basicStatus.hardState.getVote(),
-                basicStatus.hardState.getCommit(),
-                basicStatus.softState.lead(),
-                basicStatus.softState.raftState(),
-                basicStatus.applied));
+                basicStatus.id(),
+                basicStatus.hardState().getTerm(),
+                basicStatus.hardState().getVote(),
+                basicStatus.hardState().getCommit(),
+                basicStatus.softState().lead(),
+                basicStatus.softState().raftState(),
+                basicStatus.applied()));
 
         if (progress == null || progress.isEmpty()) {
             j.append("},");
@@ -133,7 +163,7 @@ public class Status {
             j.append("},");
         }
 
-        j.append(String.format("\"leadtransferee\":\"%x\"}", basicStatus.leadTransferee));
+        j.append(String.format("\"leadtransferee\":\"%x\"}", basicStatus.leadTransferee()));
         return j.toString();
     }
 

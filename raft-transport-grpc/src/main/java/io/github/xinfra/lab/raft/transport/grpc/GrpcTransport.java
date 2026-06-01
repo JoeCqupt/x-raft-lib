@@ -89,6 +89,7 @@ public class GrpcTransport implements Transport {
 
     private volatile MessageReceiver receiver;
     private volatile SnapshotSink snapshotSink;
+    private volatile UnreachableListener unreachableListener;
     private volatile Server server;
     private volatile boolean closed = false;
 
@@ -146,6 +147,11 @@ public class GrpcTransport implements Transport {
     @Override
     public void setReceiver(MessageReceiver receiver) {
         this.receiver = receiver;
+    }
+
+    @Override
+    public void setUnreachableListener(UnreachableListener listener) {
+        this.unreachableListener = listener;
     }
 
     @Override
@@ -322,11 +328,16 @@ public class GrpcTransport implements Transport {
             } catch (Throwable t) {
                 // WARN (not debug) so silent network death is visible without
                 // having to drop the logger threshold across the whole tree.
-                // Hosts should additionally call Node.reportUnreachable(peerId)
-                // when they observe persistent send failures — wiring that
-                // through a Transport-level callback is intentionally left to
-                // a follow-up so this PR stays focused on the core API.
                 LOG.warn("send to peer {} failed: {}", peerId, t.toString());
+                UnreachableListener l = unreachableListener;
+                if (l != null) {
+                    try {
+                        l.onUnreachable(peerId);
+                    } catch (Throwable cbErr) {
+                        // Listener throwing must not blow up the send-thread.
+                        LOG.warn("unreachable listener for peer {} threw: {}", peerId, cbErr.toString());
+                    }
+                }
             }
         }
 

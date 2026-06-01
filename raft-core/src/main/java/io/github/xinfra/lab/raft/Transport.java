@@ -39,7 +39,7 @@ import java.io.InputStream;
  *   t.addPeer(3L, "peer-3:8080");
  *   t.start();
  *   // ... while node is running, drain Ready and:
- *   for (Message m : ready.messages) t.send(m.getTo(), m);
+ *   for (Message m : ready.messages()) t.send(m.getTo(), m);
  *   // ... shutdown:
  *   t.close();
  * }</pre>
@@ -73,6 +73,28 @@ public interface Transport extends AutoCloseable {
      * (DefaultNode).
      */
     void setReceiver(MessageReceiver receiver);
+
+    /**
+     * Bind the listener that the transport calls when it observes a peer is
+     * unreachable (RPC failure, persistent timeout, channel closed, ...). The
+     * host should typically wire this to {@link Node#reportUnreachable(long)}
+     * so the leader pauses replication to that peer instead of burning the
+     * inflight window on doomed sends.
+     *
+     * <p>The default no-op preserves backward compatibility for transports
+     * that don't yet emit the signal — those transports will keep working,
+     * but the leader won't pause replication on send failures.
+     */
+    default void setUnreachableListener(UnreachableListener listener) {}
+
+    /** Callback fired by the transport when a peer is observed unreachable. */
+    @FunctionalInterface
+    interface UnreachableListener {
+        /**
+         * @param peerId the unreachable peer id
+         */
+        void onUnreachable(long peerId);
+    }
 
     /**
      * Register a peer's network endpoint. The address format is

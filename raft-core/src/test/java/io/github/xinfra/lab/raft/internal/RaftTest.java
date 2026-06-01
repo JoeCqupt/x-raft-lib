@@ -123,9 +123,10 @@ class RaftTest {
 
         assertThat(Util.payloadSize(Eraftpb.Entry.getDefaultInstance())).isZero();
 
-        Config cfg = newTestConfig(1, 5, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
-        cfg.maxUncommittedEntriesSize = maxEntrySize;
-        cfg.maxInflightMsgs = 2 * 1024; // avoid interference
+        Config cfg = newTestConfig(1, 5, 1, newTestMemoryStorage(withPeers(1, 2, 3))).toBuilder()
+                .maxUncommittedEntriesSize(maxEntrySize)
+                .maxInflightMsgs(2 * 1024) // avoid interference
+                .build();
         Raft r = Raft.newRaft(cfg);
         r.becomeCandidate();
         r.becomeLeader();
@@ -323,7 +324,7 @@ class RaftTest {
     }
 
     private void testLeaderElectionImpl(boolean preVote) throws RaftException {
-        Consumer<Config> cfg = preVote ? c -> c.preVote = true : null;
+        Consumer<Config.Builder> cfg = preVote ? c -> c.preVote(true) : null;
         RaftStateType candState = preVote ? RaftStateType.StatePreCandidate : RaftStateType.StateCandidate;
         long candTerm = preVote ? 0 : 1;
 
@@ -357,7 +358,7 @@ class RaftTest {
     }
 
     private void testLeaderCycleImpl(boolean preVote) throws RaftException {
-        Consumer<Config> cfg = preVote ? c -> c.preVote = true : null;
+        Consumer<Config.Builder> cfg = preVote ? c -> c.preVote(true) : null;
         Network n = newNetworkWithConfig(cfg, null, null, null);
         for (long campaignerID = 1; campaignerID <= 3; campaignerID++) {
             n.send(Eraftpb.Message.newBuilder().setFrom(campaignerID).setTo(campaignerID)
@@ -384,7 +385,7 @@ class RaftTest {
 
     @Test
     void testSingleNodePreCandidate() throws RaftException {
-        Network tt = newNetworkWithConfig(c -> c.preVote = true, (Network.StateMachine) null);
+        Network tt = newNetworkWithConfig(c -> c.preVote(true), (Network.StateMachine) null);
         tt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgHup).build());
         assertThat(tt.peer(1).state).isEqualTo(RaftStateType.StateLeader);
@@ -993,8 +994,9 @@ class RaftTest {
     }
 
     private void testCampaignWhileLeaderImpl(boolean preVote) throws RaftException {
-        Config cfg = newTestConfig(1, 10, 1, newTestMemoryStorage(withPeers(1)));
-        cfg.preVote = preVote;
+        Config cfg = newTestConfig(1, 10, 1, newTestMemoryStorage(withPeers(1))).toBuilder()
+                .preVote(preVote)
+                .build();
         Raft r = Raft.newRaft(cfg);
         assertThat(r.state).isEqualTo(RaftStateType.StateFollower);
 
@@ -1500,9 +1502,10 @@ class RaftTest {
 
     @Test
     void testProgressFlowControl() throws RaftException {
-        Config cfg = newTestConfig(1, 5, 1, newTestMemoryStorage(withPeers(1, 2)));
-        cfg.maxInflightMsgs = 3;
-        cfg.maxSizePerMsg = 2048;
+        Config cfg = newTestConfig(1, 5, 1, newTestMemoryStorage(withPeers(1, 2))).toBuilder()
+                .maxInflightMsgs(3)
+                .maxSizePerMsg(2048)
+                .build();
         Raft r = Raft.newRaft(cfg);
         r.becomeCandidate();
         r.becomeLeader();
@@ -1544,7 +1547,7 @@ class RaftTest {
     }
 
     private void testLeaderElectionOverwriteNewerLogsImpl(boolean preVote) throws RaftException {
-        Consumer<Config> cfg = preVote ? c -> c.preVote = true : null;
+        Consumer<Config.Builder> cfg = preVote ? c -> c.preVote(true) : null;
         Network n = Network.newNetworkWithConfig(cfg,
                 Network.entsWithConfig(cfg, 1),     // Node 1: Won first election
                 Network.entsWithConfig(cfg, 1),     // Node 2: Got logs from node 1
@@ -1655,12 +1658,15 @@ class RaftTest {
 
     @Test
     void testDuelingPreCandidates() throws RaftException {
-        Config cfgA = newTestConfig(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
-        cfgA.preVote = true;
-        Config cfgB = newTestConfig(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
-        cfgB.preVote = true;
-        Config cfgC = newTestConfig(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
-        cfgC.preVote = true;
+        Config cfgA = newTestConfig(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3))).toBuilder()
+                .preVote(true)
+                .build();
+        Config cfgB = newTestConfig(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3))).toBuilder()
+                .preVote(true)
+                .build();
+        Config cfgC = newTestConfig(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3))).toBuilder()
+                .preVote(true)
+                .build();
         Raft a = Raft.newRaft(cfgA);
         Raft b = Raft.newRaft(cfgB);
         Raft c = Raft.newRaft(cfgC);
@@ -1999,9 +2005,9 @@ class RaftTest {
         s3.setHardState(Eraftpb.HardState.newBuilder().setTerm(1).setCommit(2).build());
         s3.compact(2);
 
-        Config cfg1 = newTestConfig(1, 10, 1, s1); cfg1.applied = 1;
-        Config cfg2 = newTestConfig(2, 10, 1, s2); cfg2.applied = 2;
-        Config cfg3 = newTestConfig(3, 10, 1, s3); cfg3.applied = 2;
+        Config cfg1 = newTestConfigBuilder(1, 10, 1, s1).applied(1).build();
+        Config cfg2 = newTestConfigBuilder(2, 10, 1, s2).applied(2).build();
+        Config cfg3 = newTestConfigBuilder(3, 10, 1, s3).applied(2).build();
 
         Network nt = Network.newNetwork(
                 new Network.RaftStateMachine(Raft.newRaft(cfg1)),

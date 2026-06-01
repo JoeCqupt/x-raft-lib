@@ -71,7 +71,7 @@ public class Network {
         return newNetworkWithConfig(null, peers);
     }
 
-    public static Network newNetworkWithConfig(Consumer<Config> configFunc, StateMachine... peers) {
+    public static Network newNetworkWithConfig(Consumer<Config.Builder> configFunc, StateMachine... peers) {
         int size = peers.length;
         long[] peerAddrs = new long[size];
         for (int i = 0; i < size; i++) peerAddrs[i] = i + 1;
@@ -84,9 +84,9 @@ public class Network {
             if (p == null) {
                 MemoryStorage ms = newTestMemoryStorage(withPeers(peerAddrs));
                 nw.storage.put(id, ms);
-                Config cfg = newTestConfig(id, 10, 1, ms);
-                if (configFunc != null) configFunc.accept(cfg);
-                Raft sm = Raft.newRaft(cfg);
+                Config.Builder cb = newTestConfigBuilder(id, 10, 1, ms);
+                if (configFunc != null) configFunc.accept(cb);
+                Raft sm = Raft.newRaft(cb.build());
                 nw.peers.put(id, new RaftStateMachine(sm));
             } else if (p instanceof RaftStateMachine rsm) {
                 // Already a raft, re-initialize with proper peer list (matching Go behavior)
@@ -127,26 +127,26 @@ public class Network {
     }
 
     /** Creates a raft with given entry terms (for use in network creation). */
-    public static StateMachine entsWithConfig(Consumer<Config> configFunc, long... terms) {
+    public static StateMachine entsWithConfig(Consumer<Config.Builder> configFunc, long... terms) {
         MemoryStorage storage = new MemoryStorage();
         for (int i = 0; i < terms.length; i++) {
             storage.append(List.of(Eraftpb.Entry.newBuilder()
                     .setIndex(i + 1).setTerm(terms[i]).build()));
         }
-        Config cfg = newTestConfig(1, 5, 1, storage);
-        if (configFunc != null) configFunc.accept(cfg);
-        Raft sm = Raft.newRaft(cfg);
+        Config.Builder cb = newTestConfigBuilder(1, 5, 1, storage);
+        if (configFunc != null) configFunc.accept(cb);
+        Raft sm = Raft.newRaft(cb.build());
         sm.reset(terms[terms.length - 1]);
         return new RaftStateMachine(sm);
     }
 
     /** Creates a raft that voted in the given term but has no log entries. */
-    public static StateMachine votedWithConfig(Consumer<Config> configFunc, long vote, long term) {
+    public static StateMachine votedWithConfig(Consumer<Config.Builder> configFunc, long vote, long term) {
         MemoryStorage storage = new MemoryStorage();
         storage.setHardState(Eraftpb.HardState.newBuilder().setVote(vote).setTerm(term).build());
-        Config cfg = newTestConfig(1, 5, 1, storage);
-        if (configFunc != null) configFunc.accept(cfg);
-        Raft sm = Raft.newRaft(cfg);
+        Config.Builder cb = newTestConfigBuilder(1, 5, 1, storage);
+        if (configFunc != null) configFunc.accept(cb);
+        Raft sm = Raft.newRaft(cb.build());
         sm.reset(term);
         return new RaftStateMachine(sm);
     }

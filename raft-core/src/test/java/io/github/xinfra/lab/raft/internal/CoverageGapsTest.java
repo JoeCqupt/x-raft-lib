@@ -43,14 +43,15 @@ class CoverageGapsTest {
     @Test
     void statusFollowerToJsonOmitsProgress() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1, 2, 3));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         Raft r = Raft.newRaft(cfg);
 
         Status st = Status.getStatus(r);
         // Non-leader: progress map is null.
-        assertThat(st.progress).as("follower has no progress map").isNull();
+        assertThat(st.progress()).as("follower has no progress map").isNull();
 
         String json = st.toJson();
         assertThat(json)
@@ -62,21 +63,22 @@ class CoverageGapsTest {
     @Test
     void statusLeaderToJsonIncludesProgressMap() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         RawNode rn = RawNode.newRawNode(cfg);
         rn.campaign();
         // Drive to leader.
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (!rd.entries.isEmpty()) s.append(rd.entries);
+            if (!rd.entries().isEmpty()) s.append(rd.entries());
             rn.advance(rd);
         }
 
         Status st = rn.status();
-        assertThat(st.progress).as("leader has progress map").isNotNull();
-        assertThat(st.progress).containsKey(1L);
+        assertThat(st.progress()).as("leader has progress map").isNotNull();
+        assertThat(st.progress()).containsKey(1L);
 
         String json = st.toJson();
         assertThat(json)
@@ -164,17 +166,18 @@ class CoverageGapsTest {
 
     @Test
     void utilDescribeReadyNonEmpty() throws RaftException {
-        Ready rd = new Ready();
-        rd.softState = new SoftState(1, RaftStateType.StateLeader);
-        rd.hardState = Eraftpb.HardState.newBuilder().setTerm(2).setCommit(1).build();
-        rd.entries = List.of(Eraftpb.Entry.newBuilder()
-                .setIndex(1).setTerm(2)
-                .setData(ByteString.copyFromUtf8("payload")).build());
-        rd.messages = List.of(Eraftpb.Message.newBuilder()
-                .setMsgType(Eraftpb.MessageType.MsgAppend)
-                .setFrom(1).setTo(2).setTerm(2).build());
-        rd.committedEntries = List.of();
-        rd.mustSync = true;
+        Ready rd = Ready.builder()
+                .softState(new SoftState(1, RaftStateType.StateLeader))
+                .hardState(Eraftpb.HardState.newBuilder().setTerm(2).setCommit(1).build())
+                .entries(List.of(Eraftpb.Entry.newBuilder()
+                        .setIndex(1).setTerm(2)
+                        .setData(ByteString.copyFromUtf8("payload")).build()))
+                .messages(List.of(Eraftpb.Message.newBuilder()
+                        .setMsgType(Eraftpb.MessageType.MsgAppend)
+                        .setFrom(1).setTo(2).setTerm(2).build()))
+                .committedEntries(List.of())
+                .mustSync(true)
+                .build();
         String desc = Util.describeReady(rd, null);
         assertThat(desc)
                 .contains("MustSync=true")
@@ -186,132 +189,103 @@ class CoverageGapsTest {
 
     @Test
     void utilDescribeReadyEmpty() throws RaftException {
-        Ready rd = new Ready();
-        rd.entries = List.of();
-        rd.committedEntries = List.of();
-        rd.messages = List.of();
-        rd.hardState = Eraftpb.HardState.getDefaultInstance();
         // No soft state, no entries, no messages, no snapshot, no committed → empty.
-        assertThat(Util.describeReady(rd, null)).isEqualTo("<empty Ready>");
+        assertThat(Util.describeReady(Ready.empty(), null)).isEqualTo("<empty Ready>");
     }
 
-    // ============= Config.validate error branches =============
+    // ============= Config.Builder.build() error branches =============
+    // Validation moved into Builder.build(); these tests check that
+    // misconfiguration is rejected at build-time rather than at use-time.
 
     @Test
     void configValidateRejectsNoneId() throws RaftException {
-        Config c = new Config();
-        c.id = Util.NONE;
-        assertThatThrownBy(c::validate)
+        assertThatThrownBy(() -> Config.builder().id(Util.NONE).build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("cannot use none as id");
     }
 
     @Test
     void configValidateRejectsLocalThreadId() throws RaftException {
-        Config c = new Config();
-        c.id = Util.LOCAL_APPEND_THREAD;
-        assertThatThrownBy(c::validate)
+        assertThatThrownBy(() -> Config.builder().id(Util.LOCAL_APPEND_THREAD).build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("local target");
     }
 
     @Test
     void configValidateRejectsBadTickValues() throws RaftException {
-        Config c = new Config();
-        c.id = 1;
-        c.heartbeatTick = 0;
-        assertThatThrownBy(c::validate)
+        assertThatThrownBy(() -> Config.builder().id(1).heartbeatTick(0).build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("heartbeat tick must be greater than 0");
 
-        c.heartbeatTick = 5;
-        c.electionTick = 3; // election ≤ heartbeat
-        assertThatThrownBy(c::validate)
+        // election ≤ heartbeat
+        assertThatThrownBy(() -> Config.builder()
+                .id(1).heartbeatTick(5).electionTick(3).build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("election tick must be greater than heartbeat tick");
     }
 
     @Test
     void configValidateRejectsMissingStorage() throws RaftException {
-        Config c = new Config();
-        c.id = 1;
-        c.heartbeatTick = 1;
-        c.electionTick = 10;
-        c.storage = null;
-        assertThatThrownBy(c::validate)
+        assertThatThrownBy(() -> Config.builder()
+                .id(1).heartbeatTick(1).electionTick(10).storage(null).build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("storage cannot be nil");
     }
 
     @Test
     void configValidateRejectsZeroInflightMsgs() throws RaftException {
-        Config c = new Config();
-        c.id = 1;
-        c.heartbeatTick = 1;
-        c.electionTick = 10;
-        c.storage = new MemoryStorage();
-        c.maxSizePerMsg = 1024;
-        c.maxInflightMsgs = 0;
-        assertThatThrownBy(c::validate)
+        assertThatThrownBy(() -> Config.builder()
+                .id(1).heartbeatTick(1).electionTick(10)
+                .storage(new MemoryStorage())
+                .maxSizePerMsg(1024).maxInflightMsgs(0)
+                .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("max inflight messages must be greater than 0");
     }
 
     @Test
     void configValidateRejectsInflightBytesBelowMsgSize() throws RaftException {
-        Config c = new Config();
-        c.id = 1;
-        c.heartbeatTick = 1;
-        c.electionTick = 10;
-        c.storage = new MemoryStorage();
-        c.maxInflightMsgs = 16;
-        c.maxSizePerMsg = 4096;
-        c.maxInflightBytes = 1024; // < maxSizePerMsg
-        assertThatThrownBy(c::validate)
+        assertThatThrownBy(() -> Config.builder()
+                .id(1).heartbeatTick(1).electionTick(10)
+                .storage(new MemoryStorage())
+                .maxInflightMsgs(16).maxSizePerMsg(4096)
+                .maxInflightBytes(1024) // < maxSizePerMsg
+                .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("max inflight bytes must be >= max message size");
     }
 
     @Test
     void configValidateRejectsLeaseBasedReadOnlyWithoutCheckQuorum() throws RaftException {
-        Config c = new Config();
-        c.id = 1;
-        c.heartbeatTick = 1;
-        c.electionTick = 10;
-        c.storage = new MemoryStorage();
-        c.maxSizePerMsg = 1024;
-        c.maxInflightMsgs = 16;
-        c.readOnlyOption = ReadOnlyOption.ReadOnlyLeaseBased;
-        c.checkQuorum = false;
-        assertThatThrownBy(c::validate)
+        assertThatThrownBy(() -> Config.builder()
+                .id(1).heartbeatTick(1).electionTick(10)
+                .storage(new MemoryStorage())
+                .maxSizePerMsg(1024).maxInflightMsgs(16)
+                .readOnlyOption(ReadOnlyOption.ReadOnlyLeaseBased)
+                .checkQuorum(false)
+                .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("CheckQuorum must be enabled");
     }
 
     @Test
     void configValidateSetsDefaultLogger() throws RaftException {
-        Config c = new Config();
-        c.id = 1;
-        c.heartbeatTick = 1;
-        c.electionTick = 10;
-        c.storage = new MemoryStorage();
-        c.maxSizePerMsg = 1024;
-        c.maxInflightMsgs = 16;
-        c.logger = null;
-        c.validate();
-        assertThat(c.logger).as("validate populates default logger when null").isNotNull();
+        Config c = Config.builder()
+                .id(1).heartbeatTick(1).electionTick(10)
+                .storage(new MemoryStorage())
+                .maxSizePerMsg(1024).maxInflightMsgs(16)
+                .build();
+        assertThat(c.logger).as("build() populates default logger when null").isNotNull();
     }
 
     @Test
     void configValidateRejectsZeroMaxSizePerMsg() throws RaftException {
-        Config c = new Config();
-        c.id = 1;
-        c.heartbeatTick = 1;
-        c.electionTick = 10;
-        c.storage = new MemoryStorage();
-        c.maxInflightMsgs = 16;
         // maxSizePerMsg deliberately left as 0
-        assertThatThrownBy(c::validate)
+        assertThatThrownBy(() -> Config.builder()
+                .id(1).heartbeatTick(1).electionTick(10)
+                .storage(new MemoryStorage())
+                .maxInflightMsgs(16)
+                .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("maxSizePerMsg must be > 0");
     }
@@ -370,16 +344,17 @@ class CoverageGapsTest {
     @Test
     void defaultNodeNodeApiSmokeTests() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         Node n = DefaultNode.startNode(cfg, List.of(new Peer(1)));
         DefaultNode dn = (DefaultNode) n;
 
         // ready(): poll the bootstrap Ready (must not block forever).
         Ready bootstrap = dn.readyc.poll(1, java.util.concurrent.TimeUnit.SECONDS);
         if (bootstrap != null) {
-            s.append(bootstrap.entries);
+            s.append(bootstrap.entries());
             n.advance();
         }
 
@@ -387,7 +362,7 @@ class CoverageGapsTest {
         n.campaign();
         Ready ready = n.ready();
         assertThat(ready).as("ready() returned a Ready").isNotNull();
-        if (!ready.entries.isEmpty()) s.append(ready.entries);
+        if (!ready.entries().isEmpty()) s.append(ready.entries());
         n.advance();
 
         // readIndex: enqueues a MsgReadIndex.
@@ -425,9 +400,10 @@ class CoverageGapsTest {
         // Pre-populate storage so restartNode finds a non-empty log; covers
         // the path that startNode does NOT take.
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         // Bootstrap then save state.
         RawNode rn = RawNode.newRawNode(cfg);
         rn.bootstrap(List.of(new Peer(1)));
@@ -435,9 +411,10 @@ class CoverageGapsTest {
         s.append(rn.raft.raftLog.allEntries());
 
         // Now restart with a fresh config wrapping the populated storage.
-        Config cfg2 = newTestConfig(1, 10, 1, s);
-        cfg2.maxSizePerMsg = NO_LIMIT;
-        cfg2.maxInflightMsgs = 256;
+        Config cfg2 = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         Node restarted = DefaultNode.restartNode(cfg2);
         assertThat(restarted).isNotNull();
         restarted.stop();
@@ -469,14 +446,15 @@ class CoverageGapsTest {
     @Test
     void defaultNodeApiReturnsStoppedAfterStop() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         Node n = DefaultNode.startNode(cfg, List.of(new Peer(1)));
         // Drain bootstrap so stop() doesn't race with a Ready in flight.
         DefaultNode dn = (DefaultNode) n;
         Ready bootstrap = dn.readyc.poll(1, java.util.concurrent.TimeUnit.SECONDS);
-        if (bootstrap != null) { s.append(bootstrap.entries); n.advance(); }
+        if (bootstrap != null) { s.append(bootstrap.entries()); n.advance(); }
 
         n.stop();
 
@@ -515,9 +493,10 @@ class CoverageGapsTest {
     @Test
     void tickBurstLimitRejects() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         RawNode rn = RawNode.newRawNode(cfg);
         // Construct DefaultNode but DON'T start its event loop, so tick events
         // accumulate in pendingTicks without ever being drained.
@@ -545,15 +524,16 @@ class CoverageGapsTest {
     @Test
     void drainPendingOnStopCompletesAllWaiters() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         Node n = DefaultNode.startNode(cfg, List.of(new Peer(1)));
         DefaultNode dn = (DefaultNode) n;
 
         // Drain bootstrap to clear the initial Ready.
         Ready bootstrap = dn.readyc.poll(1, java.util.concurrent.TimeUnit.SECONDS);
-        if (bootstrap != null) { s.append(bootstrap.entries); n.advance(); }
+        if (bootstrap != null) { s.append(bootstrap.entries()); n.advance(); }
 
         // Launch concurrent waiters: each propose blocks on result.get().
         // While they're queued, stop() drains. drainPendingOnStop should
@@ -598,20 +578,21 @@ class CoverageGapsTest {
     @Test
     void statusAndConfChangeRaceWithStop() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         Node n = DefaultNode.startNode(cfg, List.of(new Peer(1)));
         DefaultNode dn = (DefaultNode) n;
         Ready bootstrap = dn.readyc.poll(1, java.util.concurrent.TimeUnit.SECONDS);
-        if (bootstrap != null) { s.append(bootstrap.entries); n.advance(); }
+        if (bootstrap != null) { s.append(bootstrap.entries()); n.advance(); }
 
         // Run status() and applyConfChange() in flight while we call stop.
         java.util.concurrent.ExecutorService pool =
                 java.util.concurrent.Executors.newFixedThreadPool(2);
         java.util.concurrent.Future<Status> sFut = pool.submit(() -> {
             try { return n.status(); }
-            catch (InterruptedException e) { return new Status(); }
+            catch (InterruptedException e) { return Status.empty(); }
         });
         java.util.concurrent.Future<Eraftpb.ConfState> ccFut = pool.submit(() -> {
             try {

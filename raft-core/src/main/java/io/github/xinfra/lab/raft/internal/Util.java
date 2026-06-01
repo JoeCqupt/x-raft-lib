@@ -182,37 +182,37 @@ public final class Util {
 
     public static String describeReady(Ready rd, EntryFormatter f) {
         StringBuilder buf = new StringBuilder();
-        if (rd.softState != null) {
-            buf.append(describeSoftState(rd.softState));
+        if (rd.softState() != null) {
+            buf.append(describeSoftState(rd.softState()));
             buf.append('\n');
         }
-        if (!isEmptyHardState(rd.hardState)) {
-            buf.append(String.format("HardState %s", describeHardState(rd.hardState)));
+        if (!isEmptyHardState(rd.hardState())) {
+            buf.append(String.format("HardState %s", describeHardState(rd.hardState())));
             buf.append('\n');
         }
-        if (rd.readStates != null && !rd.readStates.isEmpty()) {
-            buf.append(String.format("ReadStates %s\n", rd.readStates));
+        if (rd.readStates() != null && !rd.readStates().isEmpty()) {
+            buf.append(String.format("ReadStates %s\n", rd.readStates()));
         }
-        if (rd.entries != null && !rd.entries.isEmpty()) {
+        if (rd.entries() != null && !rd.entries().isEmpty()) {
             buf.append("Entries:\n");
-            buf.append(describeEntries(rd.entries, f));
+            buf.append(describeEntries(rd.entries(), f));
         }
-        if (rd.snapshot != null && !isEmptySnap(rd.snapshot)) {
-            buf.append(String.format("Snapshot %s\n", describeSnapshot(rd.snapshot)));
+        if (rd.snapshot() != null && !isEmptySnap(rd.snapshot())) {
+            buf.append(String.format("Snapshot %s\n", describeSnapshot(rd.snapshot())));
         }
-        if (rd.committedEntries != null && !rd.committedEntries.isEmpty()) {
+        if (rd.committedEntries() != null && !rd.committedEntries().isEmpty()) {
             buf.append("CommittedEntries:\n");
-            buf.append(describeEntries(rd.committedEntries, f));
+            buf.append(describeEntries(rd.committedEntries(), f));
         }
-        if (rd.messages != null && !rd.messages.isEmpty()) {
+        if (rd.messages() != null && !rd.messages().isEmpty()) {
             buf.append("Messages:\n");
-            for (Eraftpb.Message msg : rd.messages) {
+            for (Eraftpb.Message msg : rd.messages()) {
                 buf.append(describeMessage(msg, f));
                 buf.append('\n');
             }
         }
         if (buf.length() > 0) {
-            return String.format("Ready MustSync=%b:\n%s", rd.mustSync, buf);
+            return String.format("Ready MustSync=%b:\n%s", rd.mustSync(), buf);
         }
         return "<empty Ready>";
     }

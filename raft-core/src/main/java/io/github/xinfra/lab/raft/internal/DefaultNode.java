@@ -527,14 +527,14 @@ public class DefaultNode implements Node {
 
     @Override
     public Status status() throws InterruptedException {
-        if (done) return new Status();
+        if (done) return Status.empty();
         CompletableFuture<Status> future = new CompletableFuture<>();
-        submitWithResult(new StatusEvent(future), future, new Status());
+        submitWithResult(new StatusEvent(future), future, Status.empty());
         try {
             return future.get();
         } catch (ExecutionException e) {
             rn.raft.logger.error("status() failed: {}", e.getCause() != null ? e.getCause() : e);
-            return new Status();
+            return Status.empty();
         }
     }
 

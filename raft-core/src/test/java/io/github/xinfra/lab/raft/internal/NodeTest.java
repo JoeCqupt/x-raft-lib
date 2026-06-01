@@ -42,8 +42,9 @@ class NodeTest {
     void testDisableProposalForwarding() throws RaftException {
         Raft r1 = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft r2 = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
-        Config cfg3 = newTestConfig(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
-        cfg3.disableProposalForwarding = true;
+        Config cfg3 = newTestConfig(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3))).toBuilder()
+                .disableProposalForwarding(true)
+                .build();
         Raft r3 = Raft.newRaft(cfg3);
         Network nt = Network.newNetwork(
                 new Network.RaftStateMachine(r1),
@@ -173,9 +174,10 @@ class NodeTest {
     @Test
     void testNodeTick() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         // Use RawNode directly to avoid threading complexity
         RawNode rn = RawNode.newRawNode(cfg);
         rn.bootstrap(List.of(new Peer(1)));
@@ -190,9 +192,10 @@ class NodeTest {
     @Test
     void testNodeStop() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         Node n = DefaultNode.startNode(cfg, List.of(new Peer(1)));
         Thread.sleep(50);
 
@@ -210,9 +213,10 @@ class NodeTest {
     @Test
     void testStopWithTimeoutSucceedsForHealthyNode() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         Node n = DefaultNode.startNode(cfg, List.of(new Peer(1)));
         Thread.sleep(50);
         boolean clean = n.stop(2, java.util.concurrent.TimeUnit.SECONDS);
@@ -225,9 +229,10 @@ class NodeTest {
     @Test
     void testBasicStatusReadsLockFreeSample() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         Node n = DefaultNode.startNode(cfg, List.of(new Peer(1)));
         try {
             driveToLeader(n, s);
@@ -258,10 +263,11 @@ class NodeTest {
             }
         };
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
-        cfg.metrics = m;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .metrics(m)
+                .build();
         Node n = DefaultNode.startNode(cfg, List.of(new Peer(1)));
         try {
             driveToLeader(n, s);
@@ -278,9 +284,10 @@ class NodeTest {
     @Test
     void testLeaderObserverFiresOnElection() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         Node n = DefaultNode.startNode(cfg, List.of(new Peer(1)));
         java.util.concurrent.atomic.AtomicLong observedLead = new java.util.concurrent.atomic.AtomicLong(-1);
         java.util.concurrent.atomic.AtomicLong observedTerm = new java.util.concurrent.atomic.AtomicLong(-1);
@@ -322,9 +329,9 @@ class NodeTest {
 
     private static void drainOneReady(Node n, MemoryStorage s) throws Exception {
         Ready rd = n.ready();
-        if (rd.entries != null && !rd.entries.isEmpty()) s.append(rd.entries);
-        if (rd.committedEntries != null) {
-            for (Eraftpb.Entry e : rd.committedEntries) {
+        if (rd.entries() != null && !rd.entries().isEmpty()) s.append(rd.entries());
+        if (rd.committedEntries() != null) {
+            for (Eraftpb.Entry e : rd.committedEntries()) {
                 Eraftpb.ConfChangeV2 ccv2 = null;
                 if (e.getEntryType() == Eraftpb.EntryType.EntryConfChange) {
                     Eraftpb.ConfChange cc = Eraftpb.ConfChange.parseFrom(e.getData());
@@ -350,9 +357,10 @@ class NodeTest {
     @Test
     void testNodePropose() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         // Use RawNode directly to avoid threading timing issues
         RawNode rn = RawNode.newRawNode(cfg);
         rn.campaign();
@@ -360,7 +368,7 @@ class NodeTest {
         // Drain until leader
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (rd.entries != null && !rd.entries.isEmpty()) s.append(rd.entries);
+            if (rd.entries() != null && !rd.entries().isEmpty()) s.append(rd.entries());
             rn.advance(rd);
         }
 
@@ -371,15 +379,15 @@ class NodeTest {
         boolean foundProposal = false;
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (rd.entries != null) {
-                for (Eraftpb.Entry e : rd.entries) {
+            if (rd.entries() != null) {
+                for (Eraftpb.Entry e : rd.entries()) {
                     if (e.getData().toStringUtf8().equals("somedata")) {
                         foundProposal = true;
                     }
                 }
-                s.append(rd.entries);
+                s.append(rd.entries());
             }
-            for (Eraftpb.Entry e : rd.committedEntries) {
+            for (Eraftpb.Entry e : rd.committedEntries()) {
                 if (e.getData().toStringUtf8().equals("somedata")) {
                     foundProposal = true;
                 }
@@ -395,9 +403,8 @@ class NodeTest {
     @Test
     void testAppendPagination() throws RaftException {
         final int maxSizePerMsg = 2048;
-        Network n = Network.newNetworkWithConfig(c -> {
-            c.maxSizePerMsg = maxSizePerMsg;
-        }, (Network.StateMachine) null, null, null);
+        Network n = Network.newNetworkWithConfig(c -> c.maxSizePerMsg(maxSizePerMsg),
+                (Network.StateMachine) null, null, null);
 
         boolean[] seenFullMessage = {false};
         n.msgHook = m -> {
@@ -442,17 +449,18 @@ class NodeTest {
     @Test
     void testCommitPagination() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
-        cfg.maxCommittedSizePerReady = 2048;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .maxCommittedSizePerReady(2048)
+                .build();
         RawNode rn = RawNode.newRawNode(cfg);
         rn.campaign();
 
         // Drain until leader
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (rd.entries != null && !rd.entries.isEmpty()) s.append(rd.entries);
+            if (rd.entries() != null && !rd.entries().isEmpty()) s.append(rd.entries());
             rn.advance(rd);
         }
 
@@ -464,19 +472,19 @@ class NodeTest {
 
         // First the 3 proposals have to be appended
         Ready rd = rn.ready();
-        assertThat(rd.entries).hasSize(3);
-        s.append(rd.entries);
+        assertThat(rd.entries()).hasSize(3);
+        s.append(rd.entries());
         rn.advance(rd);
 
         // The 3 proposals will commit in two batches
         rd = rn.ready();
-        assertThat(rd.committedEntries).hasSize(2);
-        s.append(rd.entries);
+        assertThat(rd.committedEntries()).hasSize(2);
+        s.append(rd.entries());
         rn.advance(rd);
 
         rd = rn.ready();
-        assertThat(rd.committedEntries).hasSize(1);
-        s.append(rd.entries);
+        assertThat(rd.committedEntries()).hasSize(1);
+        s.append(rd.entries());
         rn.advance(rd);
     }
 
@@ -486,16 +494,17 @@ class NodeTest {
     @Test
     void testNodeProposeConfig() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         RawNode rn = RawNode.newRawNode(cfg);
         rn.campaign();
 
         // Drain until leader
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (rd.entries != null && !rd.entries.isEmpty()) s.append(rd.entries);
+            if (rd.entries() != null && !rd.entries().isEmpty()) s.append(rd.entries());
             rn.advance(rd);
         }
 
@@ -509,17 +518,17 @@ class NodeTest {
         boolean found = false;
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            for (Eraftpb.Entry e : rd.entries) {
+            for (Eraftpb.Entry e : rd.entries()) {
                 if (e.getEntryType() == Eraftpb.EntryType.EntryConfChange) {
                     found = true;
                 }
             }
-            for (Eraftpb.Entry e : rd.committedEntries) {
+            for (Eraftpb.Entry e : rd.committedEntries()) {
                 if (e.getEntryType() == Eraftpb.EntryType.EntryConfChange) {
                     found = true;
                 }
             }
-            s.append(rd.entries);
+            s.append(rd.entries());
             rn.advance(rd);
         }
         assertThat(found).isTrue();
@@ -532,16 +541,17 @@ class NodeTest {
     @Test
     void testNodeProposeAddDuplicateNode() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         RawNode rn = RawNode.newRawNode(cfg);
         rn.campaign();
 
         // Drain until leader
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (rd.entries != null && !rd.entries.isEmpty()) s.append(rd.entries);
+            if (rd.entries() != null && !rd.entries().isEmpty()) s.append(rd.entries());
             rn.advance(rd);
         }
 
@@ -554,8 +564,8 @@ class NodeTest {
         // Drain and apply
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            s.append(rd.entries);
-            for (Eraftpb.Entry e : rd.committedEntries) {
+            s.append(rd.entries());
+            for (Eraftpb.Entry e : rd.committedEntries()) {
                 if (e.getEntryType() == Eraftpb.EntryType.EntryConfChange) {
                     Eraftpb.ConfChange applied = Eraftpb.ConfChange.parseFrom(e.getData());
                     rn.applyConfChange(Eraftpb.ConfChangeV2.newBuilder()
@@ -571,8 +581,8 @@ class NodeTest {
         rn.proposeConfChange(cc1);
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            s.append(rd.entries);
-            for (Eraftpb.Entry e : rd.committedEntries) {
+            s.append(rd.entries());
+            for (Eraftpb.Entry e : rd.committedEntries()) {
                 if (e.getEntryType() == Eraftpb.EntryType.EntryConfChange) {
                     Eraftpb.ConfChange applied = Eraftpb.ConfChange.parseFrom(e.getData());
                     rn.applyConfChange(Eraftpb.ConfChangeV2.newBuilder()
@@ -593,8 +603,8 @@ class NodeTest {
         boolean foundNode2 = false;
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            s.append(rd.entries);
-            for (Eraftpb.Entry e : rd.committedEntries) {
+            s.append(rd.entries());
+            for (Eraftpb.Entry e : rd.committedEntries()) {
                 if (e.getEntryType() == Eraftpb.EntryType.EntryConfChange) {
                     Eraftpb.ConfChange applied = Eraftpb.ConfChange.parseFrom(e.getData());
                     if (applied.getNodeId() == 2) {
@@ -617,21 +627,22 @@ class NodeTest {
     @Test
     void testNodeStart() throws RaftException {
         MemoryStorage s = new MemoryStorage();
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         RawNode rn = RawNode.newRawNode(cfg);
         rn.bootstrap(List.of(new Peer(1)));
 
         // First ready should contain the conf change entry
         assertThat(rn.hasReady()).isTrue();
         Ready rd = rn.ready();
-        assertThat(rd.entries).hasSize(1);
-        assertThat(rd.entries.get(0).getEntryType()).isEqualTo(Eraftpb.EntryType.EntryConfChange);
-        assertThat(rd.committedEntries).hasSize(1);
-        assertThat(rd.hardState.getTerm()).isEqualTo(1);
-        assertThat(rd.hardState.getCommit()).isEqualTo(1);
-        s.append(rd.entries);
+        assertThat(rd.entries()).hasSize(1);
+        assertThat(rd.entries().get(0).getEntryType()).isEqualTo(Eraftpb.EntryType.EntryConfChange);
+        assertThat(rd.committedEntries()).hasSize(1);
+        assertThat(rd.hardState().getTerm()).isEqualTo(1);
+        assertThat(rd.hardState().getCommit()).isEqualTo(1);
+        s.append(rd.entries());
         rn.advance(rd);
     }
 
@@ -651,18 +662,19 @@ class NodeTest {
         storage.setHardState(st);
         storage.append(entries);
 
-        Config cfg = newTestConfig(1, 10, 1, storage);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, storage).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         RawNode rn = RawNode.newRawNode(cfg);
 
         assertThat(rn.hasReady()).isTrue();
         Ready rd = rn.ready();
         // Should commit up to the commit index in st
-        assertThat(rd.committedEntries).hasSize(1);
-        assertThat(rd.committedEntries.get(0).getIndex()).isEqualTo(1);
+        assertThat(rd.committedEntries()).hasSize(1);
+        assertThat(rd.committedEntries().get(0).getIndex()).isEqualTo(1);
         // No new HardState since nothing changed
-        assertThat(rd.mustSync).isFalse();
+        assertThat(rd.mustSync()).isFalse();
         rn.advance(rd);
 
         assertThat(rn.hasReady()).isFalse();
@@ -689,17 +701,18 @@ class NodeTest {
         s.applySnapshot(snap);
         s.append(entries);
 
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         RawNode rn = RawNode.newRawNode(cfg);
 
         assertThat(rn.hasReady()).isTrue();
         Ready rd = rn.ready();
         // Should commit the entries after snapshot
-        assertThat(rd.committedEntries).hasSize(1);
-        assertThat(rd.committedEntries.get(0).getIndex()).isEqualTo(3);
-        assertThat(rd.mustSync).isFalse();
+        assertThat(rd.committedEntries()).hasSize(1);
+        assertThat(rd.committedEntries().get(0).getIndex()).isEqualTo(3);
+        assertThat(rd.mustSync()).isFalse();
         rn.advance(rd);
 
         assertThat(rn.hasReady()).isFalse();
@@ -711,16 +724,17 @@ class NodeTest {
     @Test
     void testNodeAdvance() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         RawNode rn = RawNode.newRawNode(cfg);
         rn.campaign();
 
         // Drain until leader
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (rd.entries != null && !rd.entries.isEmpty()) s.append(rd.entries);
+            if (rd.entries() != null && !rd.entries().isEmpty()) s.append(rd.entries());
             rn.advance(rd);
         }
 
@@ -730,14 +744,14 @@ class NodeTest {
         // Should have ready with the proposal
         assertThat(rn.hasReady()).isTrue();
         Ready rd = rn.ready();
-        assertThat(rd.entries).isNotEmpty();
-        s.append(rd.entries);
+        assertThat(rd.entries()).isNotEmpty();
+        s.append(rd.entries());
         rn.advance(rd);
 
         // After advance, committed entries should be available
         assertThat(rn.hasReady()).isTrue();
         rd = rn.ready();
-        assertThat(rd.committedEntries).isNotEmpty();
+        assertThat(rd.committedEntries()).isNotEmpty();
         rn.advance(rd);
     }
 
@@ -747,16 +761,17 @@ class NodeTest {
     @Test
     void testNodeProposeAddLearnerNode() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         RawNode rn = RawNode.newRawNode(cfg);
         rn.campaign();
 
         // Drain until leader
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            if (rd.entries != null && !rd.entries.isEmpty()) s.append(rd.entries);
+            if (rd.entries() != null && !rd.entries().isEmpty()) s.append(rd.entries());
             rn.advance(rd);
         }
 
@@ -770,8 +785,8 @@ class NodeTest {
         boolean applied = false;
         while (rn.hasReady()) {
             Ready rd = rn.ready();
-            s.append(rd.entries);
-            for (Eraftpb.Entry e : rd.committedEntries) {
+            s.append(rd.entries());
+            for (Eraftpb.Entry e : rd.committedEntries()) {
                 if (e.getEntryType() == Eraftpb.EntryType.EntryConfChange) {
                     Eraftpb.ConfState cs = rn.applyConfChange(Eraftpb.ConfChangeV2.newBuilder()
                             .addChanges(Eraftpb.ConfChangeSingle.newBuilder()
@@ -812,18 +827,19 @@ class NodeTest {
         }
         s.append(ents);
 
-        Config cfg = newTestConfig(1, 10, 1, s);
         // Set a MaxSizePerMsg smaller than all entries
-        cfg.maxSizePerMsg = size - ents.get(ents.size() - 1).getSerializedSize() - 1;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(size - ents.get(ents.size() - 1).getSerializedSize() - 1)
+                .maxInflightMsgs(256)
+                .build();
         RawNode rn = RawNode.newRawNode(cfg);
 
         assertThat(rn.hasReady()).isTrue();
         Ready rd = rn.ready();
 
         // The HardState should not regress
-        if (!Util.isEmptyHardState(rd.hardState)) {
-            assertThat(rd.hardState.getCommit())
+        if (!Util.isEmptyHardState(rd.hardState())) {
+            assertThat(rd.hardState().getCommit())
                     .as("HardState commit should not regress")
                     .isGreaterThanOrEqualTo(persistedHardState.getCommit());
         }
@@ -836,9 +852,10 @@ class NodeTest {
     @Test
     void testBlockProposal() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         Node n = DefaultNode.startNode(cfg, List.of(new Peer(1)));
         DefaultNode dn = (DefaultNode) n;
 
@@ -846,7 +863,7 @@ class NodeTest {
         // otherwise campaign() is rejected with "pending configuration changes".
         Ready bootstrap = dn.readyc.poll(1, TimeUnit.SECONDS);
         assertThat(bootstrap).as("bootstrap ready").isNotNull();
-        s.append(bootstrap.entries);
+        s.append(bootstrap.entries());
         n.advance();
 
         // Campaign to elect leader
@@ -858,9 +875,9 @@ class NodeTest {
         for (int i = 0; i < 10 && !elected; i++) {
             Ready rd = dn.readyc.poll(500, TimeUnit.MILLISECONDS);
             if (rd == null) break;
-            s.append(rd.entries);
+            s.append(rd.entries());
             n.advance();
-            if (rd.softState != null && rd.softState.lead() != Util.NONE) {
+            if (rd.softState() != null && rd.softState().lead() != Util.NONE) {
                 elected = true;
             }
         }
@@ -966,7 +983,7 @@ class NodeTest {
         // otherwise campaign() is rejected with "pending configuration changes".
         Ready bootstrap = dn.readyc.poll(1, TimeUnit.SECONDS);
         assertThat(bootstrap).as("bootstrap ready").isNotNull();
-        s.append(bootstrap.entries);
+        s.append(bootstrap.entries());
         n.advance();
 
         // Campaign to elect leader
@@ -978,9 +995,9 @@ class NodeTest {
         for (int i = 0; i < 10 && !elected; i++) {
             Ready rd = dn.readyc.poll(500, TimeUnit.MILLISECONDS);
             if (rd == null) break;
-            s.append(rd.entries);
+            s.append(rd.entries());
             n.advance();
-            if (rd.softState != null && rd.softState.lead() != Util.NONE) {
+            if (rd.softState() != null && rd.softState().lead() != Util.NONE) {
                 elected = true;
             }
         }
@@ -1011,17 +1028,18 @@ class NodeTest {
     @Test
     void testCommitPaginationWithAsyncStorageWrites() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxCommittedSizePerReady = 2048;
-        cfg.asyncStorageWrites = true;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxCommittedSizePerReady(2048)
+                .asyncStorageWrites(true)
+                .build();
         RawNode rawNode = RawNode.newRawNode(cfg);
 
         rawNode.campaign();
 
         // Process the vote persistence
         Ready rd = rawNode.ready();
-        assertThat(rd.messages).hasSize(1);
-        Eraftpb.Message m = rd.messages.get(0);
+        assertThat(rd.messages()).hasSize(1);
+        Eraftpb.Message m = rd.messages().get(0);
         assertThat(m.getMsgType()).isEqualTo(Eraftpb.MessageType.MsgStorageAppend);
         s.append(m.getEntriesList());
         for (Eraftpb.Message resp : m.getResponsesList()) {
@@ -1030,8 +1048,8 @@ class NodeTest {
 
         // Append empty entry
         rd = rawNode.ready();
-        assertThat(rd.messages).hasSize(1);
-        m = rd.messages.get(0);
+        assertThat(rd.messages()).hasSize(1);
+        m = rd.messages().get(0);
         assertThat(m.getMsgType()).isEqualTo(Eraftpb.MessageType.MsgStorageAppend);
         s.append(m.getEntriesList());
         for (Eraftpb.Message resp : m.getResponsesList()) {
@@ -1040,8 +1058,8 @@ class NodeTest {
 
         // Apply empty entry
         rd = rawNode.ready();
-        assertThat(rd.messages).hasSize(2);
-        for (Eraftpb.Message msg : rd.messages) {
+        assertThat(rd.messages()).hasSize(2);
+        for (Eraftpb.Message msg : rd.messages()) {
             if (msg.getMsgType() == Eraftpb.MessageType.MsgStorageAppend) {
                 s.append(msg.getEntriesList());
                 for (Eraftpb.Message resp : msg.getResponsesList()) {
@@ -1061,8 +1079,8 @@ class NodeTest {
 
         // Append first entry
         rd = rawNode.ready();
-        assertThat(rd.messages).hasSize(1);
-        m = rd.messages.get(0);
+        assertThat(rd.messages()).hasSize(1);
+        m = rd.messages().get(0);
         assertThat(m.getMsgType()).isEqualTo(Eraftpb.MessageType.MsgStorageAppend);
         assertThat(m.getEntriesList()).hasSize(1);
         s.append(m.getEntriesList());
@@ -1075,9 +1093,9 @@ class NodeTest {
 
         // Append second entry - don't apply first entry yet.
         rd = rawNode.ready();
-        assertThat(rd.messages).hasSize(2);
+        assertThat(rd.messages()).hasSize(2);
         List<Eraftpb.Message> applyResps = new ArrayList<>();
-        for (Eraftpb.Message msg : rd.messages) {
+        for (Eraftpb.Message msg : rd.messages()) {
             if (msg.getMsgType() == Eraftpb.MessageType.MsgStorageAppend) {
                 s.append(msg.getEntriesList());
                 for (Eraftpb.Message resp : msg.getResponsesList()) {
@@ -1095,8 +1113,8 @@ class NodeTest {
 
         // Append third entry - don't apply second entry yet.
         rd = rawNode.ready();
-        assertThat(rd.messages).hasSize(2);
-        for (Eraftpb.Message msg : rd.messages) {
+        assertThat(rd.messages()).hasSize(2);
+        for (Eraftpb.Message msg : rd.messages()) {
             if (msg.getMsgType() == Eraftpb.MessageType.MsgStorageAppend) {
                 s.append(msg.getEntriesList());
                 for (Eraftpb.Message resp : msg.getResponsesList()) {
@@ -1113,7 +1131,7 @@ class NodeTest {
         // application is acknowledged. Drain any intermediate HardState-only readies.
         while (rawNode.hasReady()) {
             rd = rawNode.ready();
-            for (Eraftpb.Message msg : rd.messages) {
+            for (Eraftpb.Message msg : rd.messages()) {
                 assertThat(msg.getMsgType())
                         .as("should not get MsgStorageApply before acking first entry apply")
                         .isNotEqualTo(Eraftpb.MessageType.MsgStorageApply);
@@ -1134,7 +1152,7 @@ class NodeTest {
         assertThat(rawNode.hasReady()).isTrue();
         rd = rawNode.ready();
         boolean foundApply = false;
-        for (Eraftpb.Message msg : rd.messages) {
+        for (Eraftpb.Message msg : rd.messages()) {
             if (msg.getMsgType() == Eraftpb.MessageType.MsgStorageApply) {
                 foundApply = true;
                 assertThat(msg.getEntriesList()).hasSize(1);
@@ -1157,9 +1175,10 @@ class NodeTest {
     @Test
     void testProposalsDisabledAfterSelfRemoval() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1, 2));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
 
         Node n = DefaultNode.startNode(cfg, List.of(new Peer(1), new Peer(2)));
         DefaultNode dn = (DefaultNode) n;
@@ -1168,7 +1187,7 @@ class NodeTest {
         // applied before we issue the test conf change.
         Ready bootstrap = dn.readyc.poll(1, TimeUnit.SECONDS);
         if (bootstrap != null) {
-            s.append(bootstrap.entries);
+            s.append(bootstrap.entries());
             n.advance();
         }
 
@@ -1263,9 +1282,10 @@ class NodeTest {
     @Test
     void testTickDropsOnSaturatedQueue() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
-        Config cfg = newTestConfig(1, 10, 1, s);
-        cfg.maxSizePerMsg = NO_LIMIT;
-        cfg.maxInflightMsgs = 256;
+        Config cfg = newTestConfig(1, 10, 1, s).toBuilder()
+                .maxSizePerMsg(NO_LIMIT)
+                .maxInflightMsgs(256)
+                .build();
         RawNode rawNode = RawNode.newRawNode(cfg);
         // Use a tiny queue so we can saturate it deterministically without
         // racing the event loop. The node is constructed but never started, so

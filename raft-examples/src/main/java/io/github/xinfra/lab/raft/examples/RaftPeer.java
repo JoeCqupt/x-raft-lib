@@ -85,19 +85,20 @@ public class RaftPeer implements AutoCloseable {
         this.storage = new RocksDbStorage(storageDir);
         this.transport = transport;
 
-        Config cfg = new Config();
-        cfg.id = id;
-        cfg.electionTick = 10;
-        cfg.heartbeatTick = 1;
-        cfg.storage = storage;
-        cfg.maxSizePerMsg = 1L << 20;       // 1 MiB
-        cfg.maxInflightMsgs = 256;
-        cfg.maxUncommittedEntriesSize = 64L << 20; // 64 MiB
-        cfg.preVote = true;
-        cfg.checkQuorum = true;
-        // Recover applied-index from disk so raft skips previously-applied
-        // entries instead of re-delivering them to the host on restart.
-        cfg.applied = storage.getApplied();
+        Config cfg = Config.builder()
+                .id(id)
+                .electionTick(10)
+                .heartbeatTick(1)
+                .storage(storage)
+                .maxSizePerMsg(1L << 20)             // 1 MiB
+                .maxInflightMsgs(256)
+                .maxUncommittedEntriesSize(64L << 20) // 64 MiB
+                .preVote(true)
+                .checkQuorum(true)
+                // Recover applied-index from disk so raft skips previously-applied
+                // entries instead of re-delivering them to the host on restart.
+                .applied(storage.getApplied())
+                .build();
 
         if (bootstrap) {
             this.node = Node.startNode(cfg,
@@ -164,10 +165,10 @@ public class RaftPeer implements AutoCloseable {
             while (running) {
                 Ready rd = node.ready();
                 // 1. Persist (atomic Ready cycle).
-                storage.writeBatched(rd.entries, rd.hardState, rd.snapshot);
+                storage.writeBatched(rd.entries(), rd.hardState(), rd.snapshot());
                 // 2. Send messages.
-                if (rd.messages != null) {
-                    for (Eraftpb.Message m : rd.messages) {
+                if (rd.messages() != null) {
+                    for (Eraftpb.Message m : rd.messages()) {
                         if (m.getTo() == id) continue; // raft routes self via msgsAfterAppend
                         if (snapshotStreaming && m.getMsgType() == Eraftpb.MessageType.MsgSnapshot) {
                             sendSnapshotOutOfBand(m);
@@ -178,8 +179,8 @@ public class RaftPeer implements AutoCloseable {
                 }
                 // 3. Apply committed entries.
                 long highestApplied = 0;
-                if (rd.committedEntries != null) {
-                    for (Eraftpb.Entry e : rd.committedEntries) {
+                if (rd.committedEntries() != null) {
+                    for (Eraftpb.Entry e : rd.committedEntries()) {
                         if (e.getEntryType() == Eraftpb.EntryType.EntryNormal && e.getData().size() > 0) {
                             applier_cb.accept(e.getIndex(), e.getData().toByteArray());
                         } else if (e.getEntryType() == Eraftpb.EntryType.EntryConfChange) {

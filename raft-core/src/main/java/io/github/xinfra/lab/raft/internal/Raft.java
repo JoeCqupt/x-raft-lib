@@ -35,18 +35,27 @@ import java.util.stream.Collectors;
 public class Raft {
     RaftLogger logger;
 
-    public long id;
-    public long term;
+    // -------------------------------------------------------------------------
+    // Field visibility: every field below is package-private. The public API
+    // package ({@code io.github.xinfra.lab.raft}) reads them through the
+    // accessor methods declared further down — never via direct field access.
+    // This is the "lockdown" boundary: a host can't accidentally (or
+    // maliciously) mutate Raft state by holding a reference to the internal
+    // Raft instance, since the fields aren't visible from their package.
+    // -------------------------------------------------------------------------
+
+    long id;
+    long term;
     long vote;
 
-    public List<ReadState> readStates;
+    List<ReadState> readStates;
 
-    public RaftLog raftLog;
+    RaftLog raftLog;
 
     long maxMsgSize;
     long maxUncommittedSize;
 
-    public ProgressTracker trk;
+    ProgressTracker trk;
 
     // Default to StateFollower so traceInitState (called before becomeFollower
     // in newRaft) doesn't NPE on r.state.name(). Mirrors Go's zero-value
@@ -54,11 +63,11 @@ public class Raft {
     RaftStateType state = RaftStateType.StateFollower;
     boolean isLearner;
 
-    public List<Eraftpb.Message> msgs;
-    public List<Eraftpb.Message> msgsAfterAppend;
+    List<Eraftpb.Message> msgs;
+    List<Eraftpb.Message> msgsAfterAppend;
 
     long lead;
-    public long leadTransferee;
+    long leadTransferee;
     long pendingConfIndex;
     boolean disableConfChangeValidation;
     long uncommittedSize;
@@ -69,7 +78,7 @@ public class Raft {
     // never gets promoted (tickElection only resets electionElapsed on the
     // promotable + pastTimeout branch). At 100Hz tick, an int would overflow
     // in ~248 days; long is effectively unbounded.
-    public long electionElapsed;
+    long electionElapsed;
     long heartbeatElapsed;
 
     boolean checkQuorum;
@@ -81,7 +90,7 @@ public class Raft {
     boolean disableProposalForwarding;
     boolean stepDownOnRemoval;
 
-    public Runnable tickFn;
+    Runnable tickFn;
     StepFunction stepFn;
 
     List<Eraftpb.Message> pendingReadIndexMessages;
@@ -101,7 +110,8 @@ public class Raft {
 
     // ============= newRaft =============
     public static Raft newRaft(Config c) {
-        c.validate();
+        // Config is already validated by Config.Builder.build(); the public
+        // ctor path doesn't exist anymore, so no defensive validate() call here.
         RaftLog raftlog = RaftLog.newLogWithSize(c.storage, c.maxCommittedSizePerReady);
         Storage.InitialStateResult isr = c.storage.initialState();
         Eraftpb.HardState hs = isr.hardState();
@@ -155,6 +165,53 @@ public class Raft {
     }
 
     public boolean hasLeader() { return lead != Util.NONE; }
+
+    // ============= Public accessors =============
+    // These are the ONLY way for callers in {@code io.github.xinfra.lab.raft}
+    // (RawNode, Status, ...) to reach internal Raft state. Fields above are
+    // package-private; cross-package mutation must funnel through the
+    // explicit operations below (e.g. {@link #incrementElectionElapsed},
+    // {@link #drainMsgs}).
+
+    public long id() { return id; }
+    public long term() { return term; }
+    public long lead() { return lead; }
+    public long leadTransferee() { return leadTransferee; }
+    public long electionElapsed() { return electionElapsed; }
+    public RaftStateType state() { return state; }
+
+    /** Read-only handle to the raft log; callers must not mutate via this. */
+    public RaftLog raftLog() { return raftLog; }
+    public ProgressTracker tracker() { return trk; }
+
+    /** Tick once. Replaces direct {@code raft.tickFn.run()} access. */
+    public void tick() { tickFn.run(); }
+
+    /** Bump the election clock without running the full tick logic. */
+    public void incrementElectionElapsed() { electionElapsed++; }
+
+    public List<Eraftpb.Message> msgs() { return msgs; }
+    public List<Eraftpb.Message> msgsAfterAppend() { return msgsAfterAppend; }
+    public List<ReadState> readStates() { return readStates; }
+
+    /** Atomically take and reset the outbound message buffer. */
+    public List<Eraftpb.Message> drainMsgs() {
+        List<Eraftpb.Message> taken = msgs;
+        msgs = new ArrayList<>();
+        return taken;
+    }
+
+    /** Atomically take and reset the after-append message buffer. */
+    public List<Eraftpb.Message> drainMsgsAfterAppend() {
+        List<Eraftpb.Message> taken = msgsAfterAppend;
+        msgsAfterAppend = new ArrayList<>();
+        return taken;
+    }
+
+    /** Reset the local read-state queue (caller has already consumed it). */
+    public void resetReadStates() {
+        readStates = new ArrayList<>();
+    }
 
     public SoftState softState() { return new SoftState(lead, state); }
 

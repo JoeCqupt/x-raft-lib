@@ -126,6 +126,15 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     private final WriteOptions writeOpts;
     private final Path snapDir;
 
+    /**
+     * Private monitor used by every {@code synchronized} block in this class.
+     * Synchronizing on {@code this} would let any caller that holds a reference
+     * to the storage acquire its monitor (intentionally or accidentally) and
+     * stall every read/write — a classic "monitor pollution" risk for a public
+     * type. A private final {@link Object} keeps the lock encapsulated.
+     */
+    private final Object lock = new Object();
+
     private volatile boolean closed = false;
 
     public RocksDbStorage(Path dir) throws RocksDBException, IOException {
@@ -180,231 +189,253 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     // ====================== Storage read API ======================
 
     @Override
-    public synchronized InitialStateResult initialState() {
-        try {
-            byte[] hsBytes = db.get(cfState, KEY_HARD_STATE);
-            Eraftpb.HardState hs = hsBytes == null
-                    ? Eraftpb.HardState.getDefaultInstance()
-                    : Eraftpb.HardState.parseFrom(hsBytes);
-            // Prefer the explicitly-persisted ConfState (host updates this
-            // after each applyConfChange). Fall back to the latest snapshot's
-            // metadata, then to default. This matches etcd-raft's recovery
-            // order: snapshot meta is the bootstrap baseline, but a node
-            // that's done conf changes since then has more recent state.
-            byte[] csBytes = db.get(cfState, KEY_CONF_STATE);
-            Eraftpb.ConfState cs;
-            if (csBytes != null) {
-                cs = Eraftpb.ConfState.parseFrom(csBytes);
-            } else {
-                byte[] snapBytes = db.get(cfSnap, KEY_SNAPSHOT);
-                cs = (snapBytes != null)
-                        ? Eraftpb.Snapshot.parseFrom(snapBytes).getMetadata().getConfState()
-                        : Eraftpb.ConfState.getDefaultInstance();
-            }
-            return new InitialStateResult(hs, cs);
-        } catch (InvalidProtocolBufferException e) {
-            throw new RaftInvariantException(RaftInvariantException.Category.DATA_CORRUPTION,
-                    "rocksdb initialState parse failed (corrupt hard/conf state)", e);
-        } catch (RocksDBException e) {
-            throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                    "rocksdb initialState read failed", e);
-        }
-    }
-
-    @Override
-    public synchronized List<Eraftpb.Entry> entries(long lo, long hi, long maxSize) throws RaftException {
-        long first = firstIndex();
-        long last = lastIndex();
-        if (lo < first) throw RaftException.ErrCompacted;
-        if (hi > last + 1) throw new RaftInvariantException(
-                "entries' hi(" + hi + ") is out of bound lastindex(" + last + ")");
-
-        List<Eraftpb.Entry> result = new ArrayList<>();
-        long size = 0;
-        try (RocksIterator it = db.newIterator(cfLog)) {
-            it.seek(indexKey(lo));
-            while (it.isValid()) {
-                long k = decodeIndex(it.key());
-                if (k >= hi) break;
-                Eraftpb.Entry e;
-                try {
-                    e = Eraftpb.Entry.parseFrom(it.value());
-                } catch (InvalidProtocolBufferException ipe) {
-                    throw new RaftInvariantException(RaftInvariantException.Category.DATA_CORRUPTION,
-                            "rocksdb log entry corrupt at " + k, ipe);
+    public InitialStateResult initialState() {
+        synchronized (lock) {
+            try {
+                byte[] hsBytes = db.get(cfState, KEY_HARD_STATE);
+                Eraftpb.HardState hs = hsBytes == null
+                        ? Eraftpb.HardState.getDefaultInstance()
+                        : Eraftpb.HardState.parseFrom(hsBytes);
+                // Prefer the explicitly-persisted ConfState (host updates this
+                // after each applyConfChange). Fall back to the latest snapshot's
+                // metadata, then to default. This matches etcd-raft's recovery
+                // order: snapshot meta is the bootstrap baseline, but a node
+                // that's done conf changes since then has more recent state.
+                byte[] csBytes = db.get(cfState, KEY_CONF_STATE);
+                Eraftpb.ConfState cs;
+                if (csBytes != null) {
+                    cs = Eraftpb.ConfState.parseFrom(csBytes);
+                } else {
+                    byte[] snapBytes = db.get(cfSnap, KEY_SNAPSHOT);
+                    cs = (snapBytes != null)
+                            ? Eraftpb.Snapshot.parseFrom(snapBytes).getMetadata().getConfState()
+                            : Eraftpb.ConfState.getDefaultInstance();
                 }
-                size += e.getSerializedSize();
-                if (!result.isEmpty() && size > maxSize) break;
-                result.add(e);
-                it.next();
+                return new InitialStateResult(hs, cs);
+            } catch (InvalidProtocolBufferException e) {
+                throw new RaftInvariantException(RaftInvariantException.Category.DATA_CORRUPTION,
+                        "rocksdb initialState parse failed (corrupt hard/conf state)", e);
+            } catch (RocksDBException e) {
+                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                        "rocksdb initialState read failed", e);
             }
         }
-        return result;
     }
 
     @Override
-    public synchronized long term(long i) throws RaftException {
-        // Treat the snapshot point (or virtual index 0 on fresh storage)
-        // as a dummy with stored term, matching MemoryStorage's
-        // dummy-entry-at-snap-index semantics. Callers (RaftLog.lastEntryID
-        // etc.) rely on term(0)==0 on bootstrap.
-        Eraftpb.Snapshot snap = readSnapshotInternal();
-        long snapIdx = snap == null ? 0 : snap.getMetadata().getIndex();
-        long snapTerm = snap == null ? 0 : snap.getMetadata().getTerm();
-        if (i == snapIdx) return snapTerm;
-        if (i < snapIdx) throw RaftException.ErrCompacted;
-        if (i > lastIndex()) throw RaftException.ErrUnavailable;
-        try {
-            byte[] v = db.get(cfLog, indexKey(i));
-            if (v == null) throw RaftException.ErrUnavailable;
-            return Eraftpb.Entry.parseFrom(v).getTerm();
-        } catch (InvalidProtocolBufferException e) {
-            throw new RaftInvariantException(RaftInvariantException.Category.DATA_CORRUPTION,
-                    "rocksdb log entry corrupt at " + i, e);
-        } catch (RocksDBException e) {
-            throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                    "rocksdb term read failed at " + i, e);
+    public  List<Eraftpb.Entry> entries(long lo, long hi, long maxSize) throws RaftException {
+        synchronized (lock) {
+            long first = firstIndex();
+            long last = lastIndex();
+            if (lo < first) throw RaftException.ErrCompacted;
+            if (hi > last + 1) throw new RaftInvariantException(
+                    "entries' hi(" + hi + ") is out of bound lastindex(" + last + ")");
+
+            List<Eraftpb.Entry> result = new ArrayList<>();
+            long size = 0;
+            try (RocksIterator it = db.newIterator(cfLog)) {
+                it.seek(indexKey(lo));
+                while (it.isValid()) {
+                    long k = decodeIndex(it.key());
+                    if (k >= hi) break;
+                    Eraftpb.Entry e;
+                    try {
+                        e = Eraftpb.Entry.parseFrom(it.value());
+                    } catch (InvalidProtocolBufferException ipe) {
+                        throw new RaftInvariantException(RaftInvariantException.Category.DATA_CORRUPTION,
+                                "rocksdb log entry corrupt at " + k, ipe);
+                    }
+                    size += e.getSerializedSize();
+                    if (!result.isEmpty() && size > maxSize) break;
+                    result.add(e);
+                    it.next();
+                }
+            }
+            return result;
         }
     }
 
     @Override
-    public synchronized long lastIndex() {
-        try (RocksIterator it = db.newIterator(cfLog)) {
-            it.seekToLast();
-            if (it.isValid()) return decodeIndex(it.key());
-        }
-        // No log entries: lastIndex = snapshot.index (or 0 if no snapshot).
-        Eraftpb.Snapshot snap = readSnapshotInternal();
-        return snap == null ? 0 : snap.getMetadata().getIndex();
-    }
-
-    @Override
-    public synchronized long firstIndex() {
-        // With snapshot: firstIndex = snap.index + 1.
-        // Without snapshot: firstIndex = lowest stored log key, or 1 if log is empty.
-        // Note: unlike MemoryStorage we do NOT keep a dummy entry at the
-        // compaction point — log entries here are keyed by their actual
-        // raft index. compact() / applySnapshot() leave the log starting
-        // at compactIndex+1, which is correctly the firstIndex.
-        Eraftpb.Snapshot snap = readSnapshotInternal();
-        if (snap != null && snap.getMetadata().getIndex() > 0) {
-            return snap.getMetadata().getIndex() + 1;
-        }
-        try (RocksIterator it = db.newIterator(cfLog)) {
-            it.seekToFirst();
-            if (it.isValid()) {
-                return decodeIndex(it.key());
+    public  long term(long i) throws RaftException {
+        synchronized (lock) {
+            // Treat the snapshot point (or virtual index 0 on fresh storage)
+            // as a dummy with stored term, matching MemoryStorage's
+            // dummy-entry-at-snap-index semantics. Callers (RaftLog.lastEntryID
+            // etc.) rely on term(0)==0 on bootstrap.
+            Eraftpb.Snapshot snap = readSnapshotInternal();
+            long snapIdx = snap == null ? 0 : snap.getMetadata().getIndex();
+            long snapTerm = snap == null ? 0 : snap.getMetadata().getTerm();
+            if (i == snapIdx) return snapTerm;
+            if (i < snapIdx) throw RaftException.ErrCompacted;
+            if (i > lastIndex()) throw RaftException.ErrUnavailable;
+            try {
+                byte[] v = db.get(cfLog, indexKey(i));
+                if (v == null) throw RaftException.ErrUnavailable;
+                return Eraftpb.Entry.parseFrom(v).getTerm();
+            } catch (InvalidProtocolBufferException e) {
+                throw new RaftInvariantException(RaftInvariantException.Category.DATA_CORRUPTION,
+                        "rocksdb log entry corrupt at " + i, e);
+            } catch (RocksDBException e) {
+                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                        "rocksdb term read failed at " + i, e);
             }
         }
-        return 1;
     }
 
     @Override
-    public synchronized Eraftpb.Snapshot snapshot() throws RaftException {
-        Eraftpb.Snapshot snap = readSnapshotInternal();
-        return snap == null ? Eraftpb.Snapshot.getDefaultInstance() : snap;
+    public  long lastIndex() {
+        synchronized (lock) {
+            try (RocksIterator it = db.newIterator(cfLog)) {
+                it.seekToLast();
+                if (it.isValid()) return decodeIndex(it.key());
+            }
+            // No log entries: lastIndex = snapshot.index (or 0 if no snapshot).
+            Eraftpb.Snapshot snap = readSnapshotInternal();
+            return snap == null ? 0 : snap.getMetadata().getIndex();
+        }
+    }
+
+    @Override
+    public  long firstIndex() {
+        synchronized (lock) {
+            // With snapshot: firstIndex = snap.index + 1.
+            // Without snapshot: firstIndex = lowest stored log key, or 1 if log is empty.
+            // Note: unlike MemoryStorage we do NOT keep a dummy entry at the
+            // compaction point — log entries here are keyed by their actual
+            // raft index. compact() / applySnapshot() leave the log starting
+            // at compactIndex+1, which is correctly the firstIndex.
+            Eraftpb.Snapshot snap = readSnapshotInternal();
+            if (snap != null && snap.getMetadata().getIndex() > 0) {
+                return snap.getMetadata().getIndex() + 1;
+            }
+            try (RocksIterator it = db.newIterator(cfLog)) {
+                it.seekToFirst();
+                if (it.isValid()) {
+                    return decodeIndex(it.key());
+                }
+            }
+            return 1;
+        }
+    }
+
+    @Override
+    public  Eraftpb.Snapshot snapshot() throws RaftException {
+        synchronized (lock) {
+            Eraftpb.Snapshot snap = readSnapshotInternal();
+            return snap == null ? Eraftpb.Snapshot.getDefaultInstance() : snap;
+        }
     }
 
     // ====================== Storage write API ======================
 
     @Override
-    public synchronized void setHardState(Eraftpb.HardState hs) {
-        try (WriteBatch wb = new WriteBatch()) {
-            wb.put(cfState, KEY_HARD_STATE, hs.toByteArray());
-            db.write(writeOpts, wb);
-        } catch (RocksDBException e) {
-            throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                    "rocksdb setHardState failed", e);
+    public  void setHardState(Eraftpb.HardState hs) {
+        synchronized (lock) {
+            try (WriteBatch wb = new WriteBatch()) {
+                wb.put(cfState, KEY_HARD_STATE, hs.toByteArray());
+                db.write(writeOpts, wb);
+            } catch (RocksDBException e) {
+                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                        "rocksdb setHardState failed", e);
+            }
         }
     }
 
     @Override
-    public synchronized void append(List<Eraftpb.Entry> entries) {
-        if (entries == null || entries.isEmpty()) return;
-        try (WriteBatch wb = new WriteBatch()) {
-            appendIntoBatch(wb, entries);
-            db.write(writeOpts, wb);
-        } catch (RocksDBException e) {
-            throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                    "rocksdb append failed", e);
+    public  void append(List<Eraftpb.Entry> entries) {
+        synchronized (lock) {
+            if (entries == null || entries.isEmpty()) return;
+            try (WriteBatch wb = new WriteBatch()) {
+                appendIntoBatch(wb, entries);
+                db.write(writeOpts, wb);
+            } catch (RocksDBException e) {
+                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                        "rocksdb append failed", e);
+            }
         }
     }
 
     @Override
-    public synchronized void applySnapshot(Eraftpb.Snapshot snap) throws RaftException {
-        if (alreadyInstalledOutOfBand(snap)) {
-            // Metadata-only re-apply of a snapshot already streamed into the
-            // side-car; persisting it inline would orphan the side-car. No-op.
-            return;
+    public  void applySnapshot(Eraftpb.Snapshot snap) throws RaftException {
+        synchronized (lock) {
+            if (alreadyInstalledOutOfBand(snap)) {
+                // Metadata-only re-apply of a snapshot already streamed into the
+                // side-car; persisting it inline would orphan the side-car. No-op.
+                return;
+            }
+            Eraftpb.Snapshot existing = readSnapshotInternal();
+            if (existing != null && existing.getMetadata().getIndex() >= snap.getMetadata().getIndex()) {
+                throw RaftException.ErrSnapOutOfDate;
+            }
+            String prevFile = readSnapshotFileName();
+            try (WriteBatch wb = new WriteBatch()) {
+                wb.put(cfSnap, KEY_SNAPSHOT, snap.toByteArray());
+                // Inline payload: this snapshot is no longer side-car backed.
+                wb.delete(cfState, KEY_SNAPSHOT_FILE);
+                // Discard log entries up through snap.index inclusive.
+                long snapIdx = snap.getMetadata().getIndex();
+                wb.deleteRange(cfLog, indexKey(0), indexKey(snapIdx + 1));
+                db.write(writeOpts, wb);
+            } catch (RocksDBException e) {
+                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                        "rocksdb applySnapshot failed", e);
+            }
+            deleteOldSidecar(prevFile, null);
         }
-        Eraftpb.Snapshot existing = readSnapshotInternal();
-        if (existing != null && existing.getMetadata().getIndex() >= snap.getMetadata().getIndex()) {
-            throw RaftException.ErrSnapOutOfDate;
-        }
-        String prevFile = readSnapshotFileName();
-        try (WriteBatch wb = new WriteBatch()) {
-            wb.put(cfSnap, KEY_SNAPSHOT, snap.toByteArray());
-            // Inline payload: this snapshot is no longer side-car backed.
-            wb.delete(cfState, KEY_SNAPSHOT_FILE);
-            // Discard log entries up through snap.index inclusive.
-            long snapIdx = snap.getMetadata().getIndex();
-            wb.deleteRange(cfLog, indexKey(0), indexKey(snapIdx + 1));
-            db.write(writeOpts, wb);
-        } catch (RocksDBException e) {
-            throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                    "rocksdb applySnapshot failed", e);
-        }
-        deleteOldSidecar(prevFile, null);
     }
 
     @Override
-    public synchronized Eraftpb.Snapshot createSnapshot(long i, Eraftpb.ConfState cs, byte[] data) throws RaftException {
-        Eraftpb.Snapshot existing = readSnapshotInternal();
-        if (existing != null && i <= existing.getMetadata().getIndex()) {
-            throw RaftException.ErrSnapOutOfDate;
+    public  Eraftpb.Snapshot createSnapshot(long i, Eraftpb.ConfState cs, byte[] data) throws RaftException {
+        synchronized (lock) {
+            Eraftpb.Snapshot existing = readSnapshotInternal();
+            if (existing != null && i <= existing.getMetadata().getIndex()) {
+                throw RaftException.ErrSnapOutOfDate;
+            }
+            if (i > lastIndex()) {
+                throw new RaftInvariantException("createSnapshot " + i + " > lastIndex " + lastIndex());
+            }
+            long term;
+            try {
+                term = term(i);
+            } catch (RaftException e) {
+                throw new RaftInvariantException("createSnapshot: term(" + i + ") failed: " + e.code(), e);
+            }
+            Eraftpb.SnapshotMetadata.Builder mb = Eraftpb.SnapshotMetadata.newBuilder()
+                    .setIndex(i).setTerm(term);
+            if (cs != null) mb.setConfState(cs);
+            Eraftpb.Snapshot snap = Eraftpb.Snapshot.newBuilder()
+                    .setMetadata(mb)
+                    .setData(data == null ? com.google.protobuf.ByteString.EMPTY : com.google.protobuf.ByteString.copyFrom(data))
+                    .build();
+            String prevFile = readSnapshotFileName();
+            try (WriteBatch wb = new WriteBatch()) {
+                wb.put(cfSnap, KEY_SNAPSHOT, snap.toByteArray());
+                wb.delete(cfState, KEY_SNAPSHOT_FILE);
+                db.write(writeOpts, wb);
+            } catch (RocksDBException e) {
+                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                        "rocksdb createSnapshot failed", e);
+            }
+            deleteOldSidecar(prevFile, null);
+            return snap;
         }
-        if (i > lastIndex()) {
-            throw new RaftInvariantException("createSnapshot " + i + " > lastIndex " + lastIndex());
-        }
-        long term;
-        try {
-            term = term(i);
-        } catch (RaftException e) {
-            throw new RaftInvariantException("createSnapshot: term(" + i + ") failed: " + e.code(), e);
-        }
-        Eraftpb.SnapshotMetadata.Builder mb = Eraftpb.SnapshotMetadata.newBuilder()
-                .setIndex(i).setTerm(term);
-        if (cs != null) mb.setConfState(cs);
-        Eraftpb.Snapshot snap = Eraftpb.Snapshot.newBuilder()
-                .setMetadata(mb)
-                .setData(data == null ? com.google.protobuf.ByteString.EMPTY : com.google.protobuf.ByteString.copyFrom(data))
-                .build();
-        String prevFile = readSnapshotFileName();
-        try (WriteBatch wb = new WriteBatch()) {
-            wb.put(cfSnap, KEY_SNAPSHOT, snap.toByteArray());
-            wb.delete(cfState, KEY_SNAPSHOT_FILE);
-            db.write(writeOpts, wb);
-        } catch (RocksDBException e) {
-            throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                    "rocksdb createSnapshot failed", e);
-        }
-        deleteOldSidecar(prevFile, null);
-        return snap;
     }
 
     @Override
-    public synchronized void compact(long compactIndex) throws RaftException {
-        long first = firstIndex();
-        if (compactIndex < first) throw RaftException.ErrCompacted;
-        long last = lastIndex();
-        if (compactIndex > last) {
-            throw new RaftInvariantException("compact " + compactIndex + " > lastIndex " + last);
-        }
-        try {
-            db.deleteRange(cfLog, indexKey(0), indexKey(compactIndex + 1));
-        } catch (RocksDBException e) {
-            throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                    "rocksdb compact failed", e);
+    public  void compact(long compactIndex) throws RaftException {
+        synchronized (lock) {
+            long first = firstIndex();
+            if (compactIndex < first) throw RaftException.ErrCompacted;
+            long last = lastIndex();
+            if (compactIndex > last) {
+                throw new RaftInvariantException("compact " + compactIndex + " > lastIndex " + last);
+            }
+            try {
+                db.deleteRange(cfLog, indexKey(0), indexKey(compactIndex + 1));
+            } catch (RocksDBException e) {
+                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                        "rocksdb compact failed", e);
+            }
         }
     }
 
@@ -416,90 +447,94 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     }
 
     @Override
-    public synchronized Eraftpb.Snapshot createSnapshotStreaming(long i, Eraftpb.ConfState cs, SnapshotDataWriter writer)
+    public  Eraftpb.Snapshot createSnapshotStreaming(long i, Eraftpb.ConfState cs, SnapshotDataWriter writer)
             throws RaftException, IOException {
-        Eraftpb.Snapshot existing = readSnapshotInternal();
-        if (existing != null && i <= existing.getMetadata().getIndex()) {
-            throw RaftException.ErrSnapOutOfDate;
-        }
-        if (i > lastIndex()) {
-            throw new RaftInvariantException("createSnapshot " + i + " > lastIndex " + lastIndex());
-        }
-        long term;
-        try {
-            term = term(i);
-        } catch (RaftException e) {
-            throw new RaftInvariantException("createSnapshot: term(" + i + ") failed: " + e.code(), e);
-        }
+        synchronized (lock) {
+            Eraftpb.Snapshot existing = readSnapshotInternal();
+            if (existing != null && i <= existing.getMetadata().getIndex()) {
+                throw RaftException.ErrSnapOutOfDate;
+            }
+            if (i > lastIndex()) {
+                throw new RaftInvariantException("createSnapshot " + i + " > lastIndex " + lastIndex());
+            }
+            long term;
+            try {
+                term = term(i);
+            } catch (RaftException e) {
+                throw new RaftInvariantException("createSnapshot: term(" + i + ") failed: " + e.code(), e);
+            }
 
-        String fileName = sidecarName(i, term);
-        // Stream the application payload straight to a side-car file; never
-        // hold it all in heap. temp -> fsync -> atomic rename -> dir fsync.
-        Path finalPath = snapDir.resolve(fileName);
-        Path tmpPath = snapDir.resolve(fileName + ".tmp");
-        try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
-                tmpPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))) {
-            writer.writeTo(out);
-            out.flush();
-        }
-        fsyncFile(tmpPath);
-        Files.move(tmpPath, finalPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        fsyncDir(snapDir);
+            String fileName = sidecarName(i, term);
+            // Stream the application payload straight to a side-car file; never
+            // hold it all in heap. temp -> fsync -> atomic rename -> dir fsync.
+            Path finalPath = snapDir.resolve(fileName);
+            Path tmpPath = snapDir.resolve(fileName + ".tmp");
+            try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
+                    tmpPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))) {
+                writer.writeTo(out);
+                out.flush();
+            }
+            fsyncFile(tmpPath);
+            Files.move(tmpPath, finalPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            fsyncDir(snapDir);
 
-        Eraftpb.SnapshotMetadata.Builder mb = Eraftpb.SnapshotMetadata.newBuilder()
-                .setIndex(i).setTerm(term);
-        if (cs != null) mb.setConfState(cs);
-        // Metadata only — payload lives in the side-car file, not inline.
-        Eraftpb.Snapshot meta = Eraftpb.Snapshot.newBuilder().setMetadata(mb).build();
+            Eraftpb.SnapshotMetadata.Builder mb = Eraftpb.SnapshotMetadata.newBuilder()
+                    .setIndex(i).setTerm(term);
+            if (cs != null) mb.setConfState(cs);
+            // Metadata only — payload lives in the side-car file, not inline.
+            Eraftpb.Snapshot meta = Eraftpb.Snapshot.newBuilder().setMetadata(mb).build();
 
-        String prevFile = readSnapshotFileName();
-        try (WriteBatch wb = new WriteBatch()) {
-            wb.put(cfSnap, KEY_SNAPSHOT, meta.toByteArray());
-            wb.put(cfState, KEY_SNAPSHOT_FILE, bytes(fileName));
-            db.write(writeOpts, wb);
-        } catch (RocksDBException e) {
-            throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                    "rocksdb streaming createSnapshot failed", e);
+            String prevFile = readSnapshotFileName();
+            try (WriteBatch wb = new WriteBatch()) {
+                wb.put(cfSnap, KEY_SNAPSHOT, meta.toByteArray());
+                wb.put(cfState, KEY_SNAPSHOT_FILE, bytes(fileName));
+                db.write(writeOpts, wb);
+            } catch (RocksDBException e) {
+                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                        "rocksdb streaming createSnapshot failed", e);
+            }
+            deleteOldSidecar(prevFile, fileName);
+            return meta;
         }
-        deleteOldSidecar(prevFile, fileName);
-        return meta;
     }
 
     @Override
-    public synchronized void applySnapshot(Eraftpb.Snapshot meta, InputStream data)
+    public  void applySnapshot(Eraftpb.Snapshot meta, InputStream data)
             throws RaftException, IOException {
-        long idx = meta.getMetadata().getIndex();
-        long term = meta.getMetadata().getTerm();
-        Eraftpb.Snapshot existing = readSnapshotInternal();
-        if (existing != null && existing.getMetadata().getIndex() >= idx) {
-            throw RaftException.ErrSnapOutOfDate;
-        }
+        synchronized (lock) {
+            long idx = meta.getMetadata().getIndex();
+            long term = meta.getMetadata().getTerm();
+            Eraftpb.Snapshot existing = readSnapshotInternal();
+            if (existing != null && existing.getMetadata().getIndex() >= idx) {
+                throw RaftException.ErrSnapOutOfDate;
+            }
 
-        String fileName = sidecarName(idx, term);
-        Path finalPath = snapDir.resolve(fileName);
-        Path tmpPath = snapDir.resolve(fileName + ".tmp");
-        try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
-                tmpPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))) {
-            data.transferTo(out);
-            out.flush();
-        }
-        fsyncFile(tmpPath);
-        Files.move(tmpPath, finalPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        fsyncDir(snapDir);
+            String fileName = sidecarName(idx, term);
+            Path finalPath = snapDir.resolve(fileName);
+            Path tmpPath = snapDir.resolve(fileName + ".tmp");
+            try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
+                    tmpPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))) {
+                data.transferTo(out);
+                out.flush();
+            }
+            fsyncFile(tmpPath);
+            Files.move(tmpPath, finalPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            fsyncDir(snapDir);
 
-        // Persist metadata only (strip any inline data the caller may have set).
-        Eraftpb.Snapshot metaOnly = meta.toBuilder().clearData().build();
-        String prevFile = readSnapshotFileName();
-        try (WriteBatch wb = new WriteBatch()) {
-            wb.put(cfSnap, KEY_SNAPSHOT, metaOnly.toByteArray());
-            wb.put(cfState, KEY_SNAPSHOT_FILE, bytes(fileName));
-            wb.deleteRange(cfLog, indexKey(0), indexKey(idx + 1));
-            db.write(writeOpts, wb);
-        } catch (RocksDBException e) {
-            throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                    "rocksdb streaming applySnapshot failed", e);
+            // Persist metadata only (strip any inline data the caller may have set).
+            Eraftpb.Snapshot metaOnly = meta.toBuilder().clearData().build();
+            String prevFile = readSnapshotFileName();
+            try (WriteBatch wb = new WriteBatch()) {
+                wb.put(cfSnap, KEY_SNAPSHOT, metaOnly.toByteArray());
+                wb.put(cfState, KEY_SNAPSHOT_FILE, bytes(fileName));
+                wb.deleteRange(cfLog, indexKey(0), indexKey(idx + 1));
+                db.write(writeOpts, wb);
+            } catch (RocksDBException e) {
+                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                        "rocksdb streaming applySnapshot failed", e);
+            }
+            deleteOldSidecar(prevFile, fileName);
         }
-        deleteOldSidecar(prevFile, fileName);
     }
 
     /**
@@ -520,47 +555,51 @@ public class RocksDbStorage implements Storage, AutoCloseable {
      * <p>If the local snapshot is already at/ahead of {@code meta}, the payload
      * is drained and discarded (no-op): the core will ignore it too.
      */
-    public synchronized void stageSnapshotData(Eraftpb.Snapshot meta, InputStream data)
+    public  void stageSnapshotData(Eraftpb.Snapshot meta, InputStream data)
             throws RaftException, IOException {
-        long idx = meta.getMetadata().getIndex();
-        long term = meta.getMetadata().getTerm();
-        Eraftpb.Snapshot existing = readSnapshotInternal();
-        if (existing != null && existing.getMetadata().getIndex() >= idx) {
-            data.transferTo(OutputStream.nullOutputStream());
-            return;
+        synchronized (lock) {
+            long idx = meta.getMetadata().getIndex();
+            long term = meta.getMetadata().getTerm();
+            Eraftpb.Snapshot existing = readSnapshotInternal();
+            if (existing != null && existing.getMetadata().getIndex() >= idx) {
+                data.transferTo(OutputStream.nullOutputStream());
+                return;
+            }
+            String fileName = sidecarName(idx, term);
+            Path finalPath = snapDir.resolve(fileName);
+            Path tmpPath = snapDir.resolve(fileName + ".tmp");
+            try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
+                    tmpPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))) {
+                data.transferTo(out);
+                out.flush();
+            }
+            fsyncFile(tmpPath);
+            Files.move(tmpPath, finalPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            fsyncDir(snapDir);
+            // Intentionally NOT linked yet: writeBatched(rd.snapshot()) finalizes after
+            // the core restores.
         }
-        String fileName = sidecarName(idx, term);
-        Path finalPath = snapDir.resolve(fileName);
-        Path tmpPath = snapDir.resolve(fileName + ".tmp");
-        try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
-                tmpPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))) {
-            data.transferTo(out);
-            out.flush();
-        }
-        fsyncFile(tmpPath);
-        Files.move(tmpPath, finalPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        fsyncDir(snapDir);
-        // Intentionally NOT linked yet: writeBatched(rd.snapshot) finalizes after
-        // the core restores.
     }
 
     @Override
-    public synchronized InputStream openSnapshotData(Eraftpb.Snapshot snap) throws RaftException, IOException {
-        // Use the side-car file only when it backs the *current* snapshot;
-        // otherwise fall back to whatever inline payload the caller passed.
-        String fileName = readSnapshotFileName();
-        if (fileName != null) {
-            Eraftpb.Snapshot cur = readSnapshotInternal();
-            long curIdx = cur == null ? 0 : cur.getMetadata().getIndex();
-            long wantIdx = snap == null ? curIdx : snap.getMetadata().getIndex();
-            Path p = snapDir.resolve(fileName);
-            if (wantIdx == curIdx && Files.exists(p)) {
-                return new BufferedInputStream(Files.newInputStream(p, StandardOpenOption.READ));
+    public  InputStream openSnapshotData(Eraftpb.Snapshot snap) throws RaftException, IOException {
+        synchronized (lock) {
+            // Use the side-car file only when it backs the *current* snapshot;
+            // otherwise fall back to whatever inline payload the caller passed.
+            String fileName = readSnapshotFileName();
+            if (fileName != null) {
+                Eraftpb.Snapshot cur = readSnapshotInternal();
+                long curIdx = cur == null ? 0 : cur.getMetadata().getIndex();
+                long wantIdx = snap == null ? curIdx : snap.getMetadata().getIndex();
+                Path p = snapDir.resolve(fileName);
+                if (wantIdx == curIdx && Files.exists(p)) {
+                    return new BufferedInputStream(Files.newInputStream(p, StandardOpenOption.READ));
+                }
             }
+            com.google.protobuf.ByteString inline =
+                    snap != null ? snap.getData() : com.google.protobuf.ByteString.EMPTY;
+            return inline.newInput();
         }
-        com.google.protobuf.ByteString inline =
-                snap != null ? snap.getData() : com.google.protobuf.ByteString.EMPTY;
-        return inline.newInput();
     }
 
     /**
@@ -632,25 +671,27 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     }
 
     @Override
-    public synchronized void close() {
-        if (closed) return;
-        closed = true;
-        for (ColumnFamilyHandle h : cfHandles) {
-            try {
-                h.close();
-            } catch (Throwable t) {
-                LOG.warn("close column-family handle failed: {}", t.toString());
+    public  void close() {
+        synchronized (lock) {
+            if (closed) return;
+            closed = true;
+            for (ColumnFamilyHandle h : cfHandles) {
+                try {
+                    h.close();
+                } catch (Throwable t) {
+                    LOG.warn("close column-family handle failed: {}", t.toString());
+                }
             }
-        }
-        try {
-            writeOpts.close();
-        } catch (Throwable t) {
-            LOG.warn("close writeOpts failed: {}", t.toString());
-        }
-        try {
-            db.close();
-        } catch (Throwable t) {
-            LOG.warn("close db failed: {}", t.toString());
+            try {
+                writeOpts.close();
+            } catch (Throwable t) {
+                LOG.warn("close writeOpts failed: {}", t.toString());
+            }
+            try {
+                db.close();
+            } catch (Throwable t) {
+                LOG.warn("close db failed: {}", t.toString());
+            }
         }
     }
 
@@ -661,14 +702,16 @@ public class RocksDbStorage implements Storage, AutoCloseable {
      * Hosts pass this back as {@link io.github.xinfra.lab.raft.Config#applied}
      * on restart so raft does NOT re-deliver previously-applied entries.
      */
-    public synchronized long getApplied() {
-        try {
-            byte[] v = db.get(cfState, KEY_APPLIED);
-            if (v == null || v.length != 8) return 0;
-            return ByteBuffer.wrap(v).getLong();
-        } catch (RocksDBException e) {
-            throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                    "rocksdb getApplied failed", e);
+    public  long getApplied() {
+        synchronized (lock) {
+            try {
+                byte[] v = db.get(cfState, KEY_APPLIED);
+                if (v == null || v.length != 8) return 0;
+                return ByteBuffer.wrap(v).getLong();
+            } catch (RocksDBException e) {
+                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                        "rocksdb getApplied failed", e);
+            }
         }
     }
 
@@ -679,13 +722,15 @@ public class RocksDbStorage implements Storage, AutoCloseable {
      * necessary is fine; calling less often risks duplicate apply on
      * restart.
      */
-    public synchronized void setApplied(long applied) {
-        try {
-            byte[] v = ByteBuffer.allocate(8).putLong(applied).array();
-            db.put(cfState, writeOpts, KEY_APPLIED, v);
-        } catch (RocksDBException e) {
-            throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                    "rocksdb setApplied failed", e);
+    public  void setApplied(long applied) {
+        synchronized (lock) {
+            try {
+                byte[] v = ByteBuffer.allocate(8).putLong(applied).array();
+                db.put(cfState, writeOpts, KEY_APPLIED, v);
+            } catch (RocksDBException e) {
+                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                        "rocksdb setApplied failed", e);
+            }
         }
     }
 
@@ -696,12 +741,14 @@ public class RocksDbStorage implements Storage, AutoCloseable {
      * log into raft (raft itself doesn't track conf-state durability —
      * it asks {@link #initialState()} once at boot).
      */
-    public synchronized void setConfState(Eraftpb.ConfState cs) {
-        try {
-            db.put(cfState, writeOpts, KEY_CONF_STATE, cs.toByteArray());
-        } catch (RocksDBException e) {
-            throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                    "rocksdb setConfState failed", e);
+    public  void setConfState(Eraftpb.ConfState cs) {
+        synchronized (lock) {
+            try {
+                db.put(cfState, writeOpts, KEY_CONF_STATE, cs.toByteArray());
+            } catch (RocksDBException e) {
+                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                        "rocksdb setConfState failed", e);
+            }
         }
     }
 
@@ -712,59 +759,61 @@ public class RocksDbStorage implements Storage, AutoCloseable {
      * Ready cycle. This is the recommended host integration:
      *
      * <pre>{@code
-     *   storage.writeBatched(rd.entries, rd.hardState, rd.snapshot);
+     *   storage.writeBatched(rd.entries(), rd.hardState(), rd.snapshot());
      * }</pre>
      */
-    public synchronized void writeBatched(List<Eraftpb.Entry> entries,
-                                          Eraftpb.HardState hs,
-                                          Eraftpb.Snapshot snap) {
-        boolean snapApplied = snap != null && !isEmptySnap(snap);
-        // Side-car file name to LINK when finalizing an out-of-band snapshot
-        // whose payload was already staged durably via stageSnapshotData; null
-        // means the inline path (drop any side-car pointer).
-        String linkFile = null;
-        if (snapApplied && alreadyInstalledOutOfBand(snap)) {
-            // This exact metadata-only snapshot is already finalized (KEY_SNAPSHOT
-            // + KEY_SNAPSHOT_FILE both point at it). Re-persisting it would be a
-            // no-op at best and could orphan the side-car at worst, so skip the
-            // snapshot sub-batch and keep entries/hardState only.
-            snapApplied = false;
-        } else if (snapApplied && snap.getData().isEmpty()) {
-            // Metadata-only snapshot: the payload travelled out-of-band. If its
-            // side-car was staged durably (stageSnapshotData), finalize by LINKING
-            // it here instead of dropping the pointer — this is the Ready cycle
-            // that runs after the core restored the snapshot. (A genuinely empty
-            // payload with no staged file falls through to the inline path.)
-            String staged = sidecarName(snap.getMetadata().getIndex(), snap.getMetadata().getTerm());
-            if (Files.exists(snapDir.resolve(staged))) {
-                linkFile = staged;
-            }
-        }
-        String prevFile = snapApplied ? readSnapshotFileName() : null;
-        try (WriteBatch wb = new WriteBatch()) {
-            if (entries != null && !entries.isEmpty()) appendIntoBatch(wb, entries);
-            if (hs != null && !isEmptyHardState(hs)) {
-                wb.put(cfState, KEY_HARD_STATE, hs.toByteArray());
-            }
-            if (snapApplied) {
-                wb.put(cfSnap, KEY_SNAPSHOT, snap.toByteArray());
-                if (linkFile != null) {
-                    // Out-of-band: point at the already-staged side-car payload.
-                    wb.put(cfState, KEY_SNAPSHOT_FILE, bytes(linkFile));
-                } else {
-                    // Inline payload via writeBatched: drop any side-car pointer.
-                    wb.delete(cfState, KEY_SNAPSHOT_FILE);
+    public void writeBatched(List<Eraftpb.Entry> entries,
+                             Eraftpb.HardState hs,
+                             Eraftpb.Snapshot snap) {
+        synchronized (lock) {
+            boolean snapApplied = snap != null && !isEmptySnap(snap);
+            // Side-car file name to LINK when finalizing an out-of-band snapshot
+            // whose payload was already staged durably via stageSnapshotData; null
+            // means the inline path (drop any side-car pointer).
+            String linkFile = null;
+            if (snapApplied && alreadyInstalledOutOfBand(snap)) {
+                // This exact metadata-only snapshot is already finalized (KEY_SNAPSHOT
+                // + KEY_SNAPSHOT_FILE both point at it). Re-persisting it would be a
+                // no-op at best and could orphan the side-car at worst, so skip the
+                // snapshot sub-batch and keep entries/hardState only.
+                snapApplied = false;
+            } else if (snapApplied && snap.getData().isEmpty()) {
+                // Metadata-only snapshot: the payload travelled out-of-band. If its
+                // side-car was staged durably (stageSnapshotData), finalize by LINKING
+                // it here instead of dropping the pointer — this is the Ready cycle
+                // that runs after the core restored the snapshot. (A genuinely empty
+                // payload with no staged file falls through to the inline path.)
+                String staged = sidecarName(snap.getMetadata().getIndex(), snap.getMetadata().getTerm());
+                if (Files.exists(snapDir.resolve(staged))) {
+                    linkFile = staged;
                 }
-                long snapIdx = snap.getMetadata().getIndex();
-                wb.deleteRange(cfLog, indexKey(0), indexKey(snapIdx + 1));
             }
-            db.write(writeOpts, wb);
-        } catch (RocksDBException e) {
-            throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                    "rocksdb writeBatched failed", e);
+            String prevFile = snapApplied ? readSnapshotFileName() : null;
+            try (WriteBatch wb = new WriteBatch()) {
+                if (entries != null && !entries.isEmpty()) appendIntoBatch(wb, entries);
+                if (hs != null && !isEmptyHardState(hs)) {
+                    wb.put(cfState, KEY_HARD_STATE, hs.toByteArray());
+                }
+                if (snapApplied) {
+                    wb.put(cfSnap, KEY_SNAPSHOT, snap.toByteArray());
+                    if (linkFile != null) {
+                        // Out-of-band: point at the already-staged side-car payload.
+                        wb.put(cfState, KEY_SNAPSHOT_FILE, bytes(linkFile));
+                    } else {
+                        // Inline payload via writeBatched: drop any side-car pointer.
+                        wb.delete(cfState, KEY_SNAPSHOT_FILE);
+                    }
+                    long snapIdx = snap.getMetadata().getIndex();
+                    wb.deleteRange(cfLog, indexKey(0), indexKey(snapIdx + 1));
+                }
+                db.write(writeOpts, wb);
+            } catch (RocksDBException e) {
+                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                        "rocksdb writeBatched failed", e);
+            }
+            // Reclaim the previous side-car, but never the one we just linked.
+            if (snapApplied) deleteOldSidecar(prevFile, linkFile);
         }
-        // Reclaim the previous side-car, but never the one we just linked.
-        if (snapApplied) deleteOldSidecar(prevFile, linkFile);
     }
 
     private void appendIntoBatch(WriteBatch wb, List<Eraftpb.Entry> entries) throws RocksDBException {

@@ -34,6 +34,15 @@
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
         </dependency>
+        <!-- JSpecify nullability annotations on the public API surface.
+             Compile-scope (not provided): @NullMarked / @Nullable carry
+             RUNTIME retention so downstream IDE/null-checker tools (NullAway,
+             IntelliJ, eclipse) see them on consumers' classpath without
+             pulling them in transitively as `provided`. -->
+        <dependency>
+            <groupId>org.jspecify</groupId>
+            <artifactId>jspecify</artifactId>
+        </dependency>
 
         <!-- test scope -->
         <dependency>
