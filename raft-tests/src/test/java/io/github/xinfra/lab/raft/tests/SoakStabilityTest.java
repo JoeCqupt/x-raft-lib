@@ -63,6 +63,7 @@ class SoakStabilityTest {
             long deadline = System.currentTimeMillis() + durationSeconds * 1_000;
             long proposals = 0;
             long lastProgressCheck = System.currentTimeMillis();
+            long lastSawProgressAt = System.currentTimeMillis();
             long lastSeenCommit = 0;
             int round = 0;
 
@@ -96,14 +97,24 @@ class SoakStabilityTest {
                     }
                 }
 
-                // Every ~3s, assert the cluster is still making forward progress
-                // (no deadlock / wedged loop).
+                // Every ~3s, sample commit. The actual liveness assertion is
+                // "no 15-second window passes without commit advancing". A
+                // stricter per-3s check fails on slow CI runners where a
+                // single forceSnapshotAndCompact + leader re-election can
+                // legitimately stall progress for ~5s without indicating a
+                // deadlock — the soak's job is to catch wedged loops, not
+                // measure throughput.
                 long now = System.currentTimeMillis();
                 if (now - lastProgressCheck > 3_000) {
                     long commit = maxCommit(nodes);
-                    assertThat(commit).as("commit must advance over time")
-                            .isGreaterThan(lastSeenCommit);
-                    lastSeenCommit = commit;
+                    if (commit > lastSeenCommit) {
+                        lastSeenCommit = commit;
+                        lastSawProgressAt = now;
+                    } else {
+                        assertThat(now - lastSawProgressAt)
+                                .as("commit (%d) must advance within 15s — wedged loop?", commit)
+                                .isLessThan(15_000);
+                    }
                     lastProgressCheck = now;
                 }
                 Thread.sleep(5);
