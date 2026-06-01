@@ -43,7 +43,7 @@ import java.util.stream.Stream;
  * across real hosts — only the addresses in the peer map change.
  *
  * <pre>{@code
- * mvn -pl raft-examples -am compile exec:java \
+ * mvn -f raft-examples/pom.xml compile exec:java \
  *     -Dexec.mainClass=io.github.xinfra.lab.raft.examples.KvClusterDemo
  * }</pre>
  */
