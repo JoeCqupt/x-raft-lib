@@ -107,8 +107,23 @@ class ZeroCopySnapshotStreamingTest {
             chaos.heal(victim);
 
             RaftPeer recovered = nodes.stream().filter(p -> p.id == victim).findFirst().orElseThrow();
-            assertThat(awaitTrue(() -> recovered.basicStatus().commit >= leaderCommit, 30_000))
-                    .as("partitioned follower must catch up to commit %d via snapshot", leaderCommit)
+            // Raft considers the snapshot installed (commit advances) the moment
+            // it processes MsgSnapshot in-memory, BUT the Storage.applySnapshot
+            // write happens on the next Ready cycle when the host drains
+            // rd.snapshot through writeBatched. Wait for BOTH layers — the test
+            // is asserting on storage state, so polling only commit leaks the
+            // gap between in-memory and on-disk snapshot.
+            assertThat(awaitTrue(() -> {
+                if (recovered.basicStatus().commit < leaderCommit) return false;
+                try {
+                    return recovered.storage.snapshot().getMetadata().getIndex() > 0;
+                } catch (Exception e) {
+                    return false;
+                }
+            }, 30_000))
+                    .as("partitioned follower must catch up to commit %d AND persist a snapshot " +
+                            "(otherwise the snapshot-install path was bypassed by log replication)",
+                            leaderCommit)
                     .isTrue();
 
             // Inline data is empty on BOTH ends — the bytes never rode in the message.
@@ -118,8 +133,6 @@ class ZeroCopySnapshotStreamingTest {
                     .as("leader snapshot must be metadata-only").isTrue();
             assertThat(recovered.storage.snapshot().getData().isEmpty())
                     .as("recovered follower snapshot must be metadata-only").isTrue();
-            assertThat(recovered.storage.snapshot().getMetadata().getIndex())
-                    .as("recovered follower must have a real snapshot index").isPositive();
 
             // The payload landed byte-for-byte in the victim's side-car file.
             Path sidecar = findSidecar(tmp.resolve("p" + victim).resolve("snapshots"));
