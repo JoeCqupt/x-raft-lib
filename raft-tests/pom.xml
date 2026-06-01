@@ -118,7 +118,11 @@
             </properties>
         </profile>
         <!-- `mvn -P soak test` runs ONLY the @Tag("soak") long-running tests.
-             Tune duration with -Dsoak.durationSeconds=<n>. -->
+             Tune duration with -Dsoak.durationSeconds=<n>.
+             {@code combine.self="override"} forces Maven to drop the parent
+             surefire config wholesale — without it, the parent's
+             {@code excludedGroups=soak} merges in and cancels our
+             {@code groups=soak}, so zero tests would run. -->
         <profile>
             <id>soak</id>
             <build>
@@ -126,8 +130,7 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-surefire-plugin</artifactId>
-                        <configuration>
-                            <excludedGroups></excludedGroups>
+                        <configuration combine.self="override">
                             <groups>soak</groups>
                             <forkCount>1</forkCount>
                             <reuseForks>true</reuseForks>

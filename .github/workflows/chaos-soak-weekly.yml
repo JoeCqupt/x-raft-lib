@@ -1,0 +1,183 @@
+name: chaos-soak-weekly
+
+# Long-running stability and fault-injection regimen. The per-PR `ci` job
+# exercises the chaos / partition / linearizability tests once each (~3-4
+# min total budget), which is enough to catch immediate breakage but too
+# short to surface:
+#
+#   - thread / file-descriptor leaks that only become visible after
+#     thousands of leader-election cycles or snapshot rotations,
+#   - rare scheduling / partition orderings that any single run misses,
+#   - apply-backlog drift that takes minutes to compound,
+#   - linearizability violations behind a low-probability schedule.
+#
+# This workflow runs weekly so a regression in any of the above shows up
+# within seven days instead of waiting for someone to remember to run a
+# 30-minute soak locally. Both jobs upload surefire reports + heap
+# diagnostics on failure so a failing schedule can be replayed without
+# re-running the whole pipeline.
+#
+# Manual trigger (`workflow_dispatch`) accepts an inline soak-duration
+# override, so an investigator can rerun a longer soak after a finding
+# without committing a duration change.
+
+on:
+  schedule:
+    # Sunday ~04:23 UTC. Off the :00 / :30 marks to dodge the GH cron
+    # rate spike, and weekend-night so a flaky run doesn't burn into the
+    # work-week's runner budget.
+    - cron: '23 4 * * 0'
+  workflow_dispatch:
+    inputs:
+      soak_duration_seconds:
+        description: 'Soak duration (seconds). Default 1800 = 30 min.'
+        required: false
+        default: '1800'
+      chaos_iterations:
+        description: 'How many times to repeat the chaos/partition stress loop.'
+        required: false
+        default: '5'
+
+concurrency:
+  group: chaos-soak-weekly
+  cancel-in-progress: true
+
+jobs:
+  # ------------------------------------------------------------------
+  # Job 1 — Long-running soak: hammer a 3-node cluster with proposals,
+  # snapshot/compact periodically, assert no apply backlog and no thread
+  # leak. Runs the @Tag("soak") tests via the existing `soak` profile in
+  # raft-tests/pom.xml, so the only knob this workflow has to set is the
+  # duration.
+  # ------------------------------------------------------------------
+  soak:
+    name: soak (3-node cluster, ${{ github.event.inputs.soak_duration_seconds || '1800' }}s)
+    runs-on: ubuntu-latest
+    # Soak default 30 min + reactor build + diagnostic upload; bound the
+    # whole job at 60 min so a wedged run can't sit on the runner forever.
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+
+      # Install the rest of the reactor first so raft-tests resolves
+      # raft-core / raft-storage-rocksdb / raft-transport-grpc /
+      # raft-examples from the local repo. -P fast on this stage skips
+      # the regular integration suite (which would re-run everything
+      # we're about to soak-test from a longer angle).
+      - name: Install reactor (skip tests)
+        run: mvn -B -ntp -DskipTests -Djacoco.skip=true install
+
+      - name: Run soak suite
+        env:
+          # workflow_dispatch input takes precedence; cron uses 30 min.
+          SOAK_DURATION_SECONDS: ${{ github.event.inputs.soak_duration_seconds || '1800' }}
+        run: |
+          mvn -B -ntp -P soak -pl raft-tests test \
+              -Djacoco.skip=true \
+              -Dsoak.durationSeconds="$SOAK_DURATION_SECONDS"
+
+      - name: Upload surefire reports (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-surefire-reports
+          path: raft-tests/target/surefire-reports/
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # Heap / thread diagnostics — useful for triaging a thread-leak
+      # assertion or a deadlock without re-running locally.
+      - name: Capture diagnostics (on failure)
+        if: failure()
+        run: |
+          mkdir -p diagnostics
+          jps -lvm > diagnostics/jps.txt 2>&1 || true
+          ls -la /tmp/hs_err_pid*.log 2>/dev/null > diagnostics/hs_err_listing.txt || true
+          cp /tmp/hs_err_pid*.log diagnostics/ 2>/dev/null || true
+      - name: Upload diagnostics (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-diagnostics
+          path: diagnostics/
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # ------------------------------------------------------------------
+  # Job 2 — Chaos stress: rerun the chaos / partition / linearizability /
+  # dynamic-membership / snapshot-install integration tests N times in a
+  # row. The per-PR `ci` job runs them once; this loop surfaces the rare
+  # ordering bugs that only flake at <20% per-run probability and would
+  # otherwise hide for months.
+  #
+  # `forkCount=1` and a per-iteration suffix on the surefire dir mean an
+  # iteration's report is preserved even if a later iteration overwrites
+  # the workspace's surefire-reports/.
+  # ------------------------------------------------------------------
+  chaos-stress:
+    name: chaos stress (${{ github.event.inputs.chaos_iterations || '5' }}× iteration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+
+      - name: Install reactor (skip tests)
+        run: mvn -B -ntp -DskipTests -Djacoco.skip=true install
+
+      - name: Repeat chaos / partition / linearizability suite
+        env:
+          ITER_COUNT: ${{ github.event.inputs.chaos_iterations || '5' }}
+        run: |
+          set -euo pipefail
+          # Subset of integration tests where rare schedules matter most.
+          # Keep one regex so failing iterations show up under a single
+          # surefire group rather than scattered across 5 maven runs.
+          TESTS='ChaosFaultInjectionIntegrationTest,PartitionIntegrationTest,KvLinearizabilityIntegrationTest,DynamicMembershipIntegrationTest,SnapshotInstallIntegrationTest,ZeroCopySnapshotStreamingTest'
+          mkdir -p chaos-archive
+          fail=0
+          for i in $(seq 1 "$ITER_COUNT"); do
+            echo "::group::chaos iteration $i / $ITER_COUNT"
+            if mvn -B -ntp -pl raft-tests test \
+                -Djacoco.skip=true \
+                -Dtest="$TESTS"; then
+              echo "iteration $i ok"
+            else
+              echo "iteration $i FAILED — preserving surefire output"
+              fail=1
+            fi
+            # Snapshot the surefire reports per iteration so the failing
+            # one isn't blown away by the next mvn invocation.
+            if [ -d raft-tests/target/surefire-reports ]; then
+              cp -a raft-tests/target/surefire-reports "chaos-archive/iter-$i"
+            fi
+            echo "::endgroup::"
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "one or more chaos iterations failed; see uploaded surefire archive"
+            exit 1
+          fi
+
+      - name: Upload chaos surefire archive
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaos-stress-surefire
+          path: chaos-archive/
+          retention-days: 30
+          if-no-files-found: ignore
