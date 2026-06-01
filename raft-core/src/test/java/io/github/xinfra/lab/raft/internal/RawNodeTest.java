@@ -32,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RawNodeTest {
 
     @Test
-    void testRawNodeStep() {
+    void testRawNodeStep() throws RaftException {
         // Test that RawNode.step ignores local messages
         for (Eraftpb.MessageType mt : Eraftpb.MessageType.values()) {
             if (mt == Eraftpb.MessageType.UNRECOGNIZED) continue;
@@ -40,7 +40,12 @@ class RawNodeTest {
             s.setHardState(Eraftpb.HardState.newBuilder().setTerm(1).setCommit(1).build());
             s.append(List.of(Eraftpb.Entry.newBuilder().setTerm(1).setIndex(1).build()));
             RawNode rn = RawNode.newRawNode(newTestConfig(1, 10, 1, s));
-            RaftException err = rn.step(Eraftpb.Message.newBuilder().setMsgType(mt).build());
+            RaftException err = null;
+            try {
+                rn.step(Eraftpb.Message.newBuilder().setMsgType(mt).build());
+            } catch (RaftException e) {
+                err = e;
+            }
             if (Util.isLocalMsg(mt)) {
                 assertThat(err).as("%s", mt).isEqualTo(RaftException.ErrStepLocalMsg);
             }
@@ -48,7 +53,7 @@ class RawNodeTest {
     }
 
     @Test
-    void testRawNodeRestart() {
+    void testRawNodeRestart() throws RaftException {
         List<Eraftpb.Entry> entries = List.of(
                 Eraftpb.Entry.newBuilder().setTerm(1).setIndex(1).build(),
                 Eraftpb.Entry.newBuilder().setTerm(1).setIndex(2)
@@ -94,10 +99,10 @@ class RawNodeTest {
     }
 
     @Test
-    void testRawNodeStatus() {
+    void testRawNodeStatus() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
         RawNode rn = RawNode.newRawNode(newTestConfig(1, 10, 1, s));
-        assertThat(rn.campaign()).isNull();
+        rn.campaign();
 
         Ready rd = rn.ready();
         s.append(rd.entries);
@@ -111,7 +116,7 @@ class RawNodeTest {
     void testRawNodeProposeAndConfChange() throws Exception {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
         RawNode rn = RawNode.newRawNode(newTestConfig(1, 10, 1, s));
-        assertThat(rn.campaign()).isNull();
+        rn.campaign();
 
         // Become leader
         Ready rd = rn.ready();
@@ -208,7 +213,7 @@ class RawNodeTest {
     }
 
     @Test
-    void testRawNodeReadIndex() {
+    void testRawNodeReadIndex() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
         Config cfg = newTestConfig(1, 10, 1, s);
         cfg.maxSizePerMsg = NO_LIMIT;
@@ -234,7 +239,7 @@ class RawNodeTest {
     }
 
     @Test
-    void testRawNodeWithProgress() {
+    void testRawNodeWithProgress() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1, 2));
         RawNode rn = RawNode.newRawNode(newTestConfig(1, 10, 1, s));
         rn.campaign();
@@ -339,7 +344,7 @@ class RawNodeTest {
      * TestRawNodeStart tests the bootstrapping flow using ApplySnapshot-based bootstrap.
      */
     @Test
-    void testRawNodeStart() {
+    void testRawNodeStart() throws RaftException {
         MemoryStorage storage = new MemoryStorage();
         // Set first index to 2 by applying a snapshot at index 1
         Eraftpb.Snapshot snap = Eraftpb.Snapshot.newBuilder()
@@ -385,7 +390,7 @@ class RawNodeTest {
      * the Storage's Entries size limitation is more permissive than Raft's internal one.
      */
     @Test
-    void testRawNodeCommitPaginationAfterRestart() {
+    void testRawNodeCommitPaginationAfterRestart() throws RaftException {
         // Create a storage that ignores the maxSize hint
         MemoryStorage base = newTestMemoryStorage(withPeers(1));
         IgnoreSizeHintMemStorage s = new IgnoreSizeHintMemStorage(base);
@@ -447,7 +452,7 @@ class RawNodeTest {
      * partitioned.
      */
     @Test
-    void testRawNodeBoundedLogGrowthWithPartition() {
+    void testRawNodeBoundedLogGrowthWithPartition() throws RaftException {
         int maxEntries = 16;
         byte[] data = "testdata".getBytes();
         Eraftpb.Entry testEntry = Eraftpb.Entry.newBuilder()
@@ -470,9 +475,15 @@ class RawNodeTest {
             }
         }
 
-        // Simulate a network partition - never committing anything.
+        // Simulate a network partition - never committing anything. Once the
+        // uncommitted-size cap is hit, propose throws ErrProposalDropped;
+        // swallow those so the loop exercises both accepted and rejected paths.
         for (int i = 0; i < 1024; i++) {
-            rawNode.propose(data);
+            try {
+                rawNode.propose(data);
+            } catch (RaftException re) {
+                // Expected: backpressure kicks in once uncommittedSize == cap.
+            }
         }
 
         // Check the size of leader's uncommitted log tail.
@@ -500,7 +511,7 @@ class RawNodeTest {
      * acceptReady (which resets the messages) but Ready() does.
      */
     @Test
-    void testRawNodeConsumeReady() {
+    void testRawNodeConsumeReady() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
         Config cfg = newTestConfig(1, 3, 1, s);
         RawNode rn = RawNode.newRawNode(cfg);

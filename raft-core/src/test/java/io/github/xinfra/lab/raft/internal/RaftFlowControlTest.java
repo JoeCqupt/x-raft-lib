@@ -32,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RaftFlowControlTest {
 
     @Test
-    void testMsgAppFlowControlFull() {
+    void testMsgAppFlowControlFull() throws RaftException {
         Raft r = newTestRaft(1, 5, 1, newTestMemoryStorage(withPeers(1, 2)));
         r.becomeCandidate();
         r.becomeLeader();
@@ -69,7 +69,7 @@ class RaftFlowControlTest {
     }
 
     @Test
-    void testMsgAppFlowControlMoveForward() {
+    void testMsgAppFlowControlMoveForward() throws RaftException {
         Raft r = newTestRaft(1, 5, 1, newTestMemoryStorage(withPeers(1, 2)));
         r.becomeCandidate();
         r.becomeLeader();
@@ -133,7 +133,7 @@ class RaftFlowControlTest {
     }
 
     @Test
-    void testMsgAppFlowControlRecvHeartbeat() {
+    void testMsgAppFlowControlRecvHeartbeat() throws RaftException {
         Raft r = newTestRaft(1, 5, 1, newTestMemoryStorage(withPeers(1, 2)));
         r.becomeCandidate();
         r.becomeLeader();

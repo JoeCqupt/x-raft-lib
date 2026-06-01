@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.*;
 class InflightsTest {
 
     @Test
-    void testInflightsAdd() {
+    void testInflightsAdd() throws RaftException {
         // no rotating case
         Inflights in = new Inflights(10, 0);
         for (int i = 0; i < 5; i++) {
@@ -43,7 +43,7 @@ class InflightsTest {
     }
 
     @Test
-    void testInflightsFreeTo() {
+    void testInflightsFreeTo() throws RaftException {
         // no rotating case
         Inflights in = new Inflights(10, 0);
         for (int i = 0; i < 10; i++) {
@@ -72,13 +72,13 @@ class InflightsTest {
     }
 
     @Test
-    void testInflightsFull_alwaysFull() {
+    void testInflightsFull_alwaysFull() throws RaftException {
         Inflights in = new Inflights(0, 0);
         assertThat(in.full()).isTrue();
     }
 
     @Test
-    void testInflightsFull_singleEntry() {
+    void testInflightsFull_singleEntry() throws RaftException {
         Inflights in = new Inflights(1, 0);
         assertThat(in.full()).isFalse();
         in.add(0, 100);
@@ -90,7 +90,7 @@ class InflightsTest {
     }
 
     @Test
-    void testInflightsFull_multiEntry() {
+    void testInflightsFull_multiEntry() throws RaftException {
         Inflights in = new Inflights(15, 0);
         for (int i = 0; i < 15; i++) {
             assertThat(in.full()).isFalse();
@@ -106,7 +106,7 @@ class InflightsTest {
     }
 
     @Test
-    void testInflightsFull_maxBytes() {
+    void testInflightsFull_maxBytes() throws RaftException {
         // size=8, maxBytes=400
         Inflights in = new Inflights(8, 400);
         for (int i = 0; i < 4; i++) {
@@ -124,7 +124,7 @@ class InflightsTest {
     }
 
     @Test
-    void testInflightsReset() {
+    void testInflightsReset() throws RaftException {
         Inflights in = new Inflights(10, 1000);
         long idx = 0;
         for (int epoch = 0; epoch < 100; epoch++) {
@@ -145,7 +145,7 @@ class InflightsTest {
     }
 
     @Test
-    void testInflightsAddPanicsWhenFull() {
+    void testInflightsAddPanicsWhenFull() throws RaftException {
         Inflights in = new Inflights(1, 0);
         in.add(0, 100);
         assertThat(in.full()).isTrue();

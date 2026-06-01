@@ -190,7 +190,7 @@ class AsyncStorageWritesTest {
      * In async mode, run Ready cycles routing MsgStorageAppend responses back
      * to raft until the node settles into a leader / steady state.
      */
-    private static void runUntilLeader(RawNode rn, MemoryStorage s) {
+    private static void runUntilLeader(RawNode rn, MemoryStorage s) throws RaftException {
         for (int iter = 0; iter < 50; iter++) {
             if (!rn.hasReady()) break;
             Ready rd = rn.ready();
@@ -262,7 +262,7 @@ class AsyncStorageWritesTest {
      * converge on the same committed/applied entries via the async path.
      */
     @Test
-    void threeNodeAsyncReplicationConverges() {
+    void threeNodeAsyncReplicationConverges() throws RaftException {
         Map<Long, AsyncNode> nodes = new HashMap<>();
         for (long id : new long[]{1, 2, 3}) {
             nodes.put(id, new AsyncNode(id, 1, 2, 3));
@@ -313,7 +313,7 @@ class AsyncStorageWritesTest {
      * supports the same convergence guarantees as sync mode.
      */
     @Test
-    void asyncFollowerCatchesUpAfterPartition() {
+    void asyncFollowerCatchesUpAfterPartition() throws RaftException {
         Map<Long, AsyncNode> nodes = new HashMap<>();
         for (long id : new long[]{1, 2, 3}) {
             nodes.put(id, new AsyncNode(id, 1, 2, 3));
@@ -347,7 +347,7 @@ class AsyncStorageWritesTest {
                 .isEqualTo(leaderApplied);
     }
 
-    private static void drainAll(Map<Long, AsyncNode> nodes, int maxIter) {
+    private static void drainAll(Map<Long, AsyncNode> nodes, int maxIter) throws RaftException {
         drainAll(nodes, java.util.Collections.emptySet(), maxIter);
     }
 
@@ -356,7 +356,7 @@ class AsyncStorageWritesTest {
      * nodes neither send nor receive peer messages, but still process their own
      * local-storage round-trip (so their internal state remains coherent).
      */
-    private static void drainAll(Map<Long, AsyncNode> nodes, java.util.Set<Long> partitioned, int maxIter) {
+    private static void drainAll(Map<Long, AsyncNode> nodes, java.util.Set<Long> partitioned, int maxIter) throws RaftException {
         // If a round of drain makes no progress we fire one tick across all
         // alive nodes — this lets the leader's heartbeat timer eventually
         // discover a recently-healed follower. Without ticking, a leader has
@@ -421,7 +421,7 @@ class AsyncStorageWritesTest {
     }
 
     private static void routeToPeer(Map<Long, AsyncNode> nodes, java.util.Set<Long> partitioned,
-                                    long fromId, Eraftpb.Message m) {
+                                    long fromId, Eraftpb.Message m) throws RaftException {
         if (partitioned.contains(fromId)) return;
         AsyncNode target = nodes.get(m.getTo());
         if (target == null || partitioned.contains(target.id)) return;

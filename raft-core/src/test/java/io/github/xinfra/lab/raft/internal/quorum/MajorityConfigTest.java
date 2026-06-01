@@ -31,14 +31,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 class MajorityConfigTest {
 
     @Test
-    void testCommittedIndex_singleVoter() {
+    void testCommittedIndex_singleVoter() throws RaftException {
         MajorityConfig c = new MajorityConfig(Set.of(1L));
         long idx = c.committedIndex(id -> id == 1 ? OptionalLong.of(100L) : OptionalLong.empty());
         assertThat(idx).isEqualTo(100);
     }
 
     @Test
-    void testCommittedIndex_threeVoters() {
+    void testCommittedIndex_threeVoters() throws RaftException {
         MajorityConfig c = new MajorityConfig(Set.of(1L, 2L, 3L));
         // With indices 101, 102, 103 the committed (majority) index is 102
         long idx = c.committedIndex(id -> {
@@ -51,7 +51,7 @@ class MajorityConfigTest {
     }
 
     @Test
-    void testCommittedIndex_threeVotersOneMissing() {
+    void testCommittedIndex_threeVotersOneMissing() throws RaftException {
         MajorityConfig c = new MajorityConfig(Set.of(1L, 2L, 3L));
         // Missing voter 2 - treated as 0
         long idx = c.committedIndex(id -> {
@@ -64,7 +64,7 @@ class MajorityConfigTest {
     }
 
     @Test
-    void testCommittedIndex_fiveVoters() {
+    void testCommittedIndex_fiveVoters() throws RaftException {
         MajorityConfig c = new MajorityConfig(Set.of(1L, 2L, 3L, 4L, 5L));
         long idx = c.committedIndex(id -> {
             if (id == 1) return OptionalLong.of(10L);
@@ -79,14 +79,14 @@ class MajorityConfigTest {
     }
 
     @Test
-    void testCommittedIndex_empty() {
+    void testCommittedIndex_empty() throws RaftException {
         MajorityConfig c = new MajorityConfig();
         long idx = c.committedIndex(id -> OptionalLong.empty());
         assertThat(idx).isEqualTo(Long.MAX_VALUE);
     }
 
     @Test
-    void testVoteResult_won() {
+    void testVoteResult_won() throws RaftException {
         MajorityConfig c = new MajorityConfig(Set.of(1L, 2L, 3L));
         Map<Long, Boolean> votes = new HashMap<>();
         votes.put(1L, true);
@@ -95,7 +95,7 @@ class MajorityConfigTest {
     }
 
     @Test
-    void testVoteResult_lost() {
+    void testVoteResult_lost() throws RaftException {
         MajorityConfig c = new MajorityConfig(Set.of(1L, 2L, 3L));
         Map<Long, Boolean> votes = new HashMap<>();
         votes.put(1L, true);
@@ -105,7 +105,7 @@ class MajorityConfigTest {
     }
 
     @Test
-    void testVoteResult_pending() {
+    void testVoteResult_pending() throws RaftException {
         MajorityConfig c = new MajorityConfig(Set.of(1L, 2L, 3L));
         Map<Long, Boolean> votes = new HashMap<>();
         votes.put(1L, true);
@@ -114,14 +114,14 @@ class MajorityConfigTest {
     }
 
     @Test
-    void testVoteResult_empty() {
+    void testVoteResult_empty() throws RaftException {
         MajorityConfig c = new MajorityConfig();
         Map<Long, Boolean> votes = new HashMap<>();
         assertThat(c.voteResult(votes)).isEqualTo(VoteResult.VoteWon);
     }
 
     @Test
-    void testVoteResult_singleVoter() {
+    void testVoteResult_singleVoter() throws RaftException {
         MajorityConfig c = new MajorityConfig(Set.of(1L));
         Map<Long, Boolean> votes = new HashMap<>();
         votes.put(1L, true);

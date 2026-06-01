@@ -23,6 +23,10 @@
 
     <dependencies>
         <dependency>
+            <groupId>io.github.x-infra-lab</groupId>
+            <artifactId>raft-proto</artifactId>
+        </dependency>
+        <dependency>
             <groupId>com.google.protobuf</groupId>
             <artifactId>protobuf-java</artifactId>
         </dependency>
@@ -65,19 +69,7 @@
     </dependencies>
 
     <build>
-        <extensions>
-            <extension>
-                <groupId>kr.motd.maven</groupId>
-                <artifactId>os-maven-plugin</artifactId>
-                <version>1.7.1</version>
-            </extension>
-        </extensions>
         <plugins>
-            <!--
-                protobuf-maven-plugin disabled: generated Eraftpb.java is committed
-                to src/main/java/io/github/xinfra/lab/raft/proto/. To regenerate, run
-                protoc with java_out pointed at src/main/java.
-            -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -108,9 +100,6 @@
                     <includes>
                         <include>io/github/xinfra/lab/raft/**</include>
                     </includes>
-                    <excludes>
-                        <exclude>io/github/xinfra/lab/raft/proto/**</exclude>
-                    </excludes>
                 </configuration>
                 <executions>
                     <execution>

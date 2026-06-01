@@ -39,14 +39,14 @@ public class Network {
     Predicate<Eraftpb.Message> msgHook;
 
     interface StateMachine {
-        RaftException step(Eraftpb.Message m);
+        void step(Eraftpb.Message m) throws RaftException;
         List<Eraftpb.Message> readMessages();
         void advanceMessagesAfterAppend();
     }
 
     /** A black hole that drops all messages. */
     static final StateMachine NOP_STEPPER = new StateMachine() {
-        @Override public RaftException step(Eraftpb.Message m) { return null; }
+        @Override public void step(Eraftpb.Message m) {}
         @Override public List<Eraftpb.Message> readMessages() { return Collections.emptyList(); }
         @Override public void advanceMessagesAfterAppend() {}
     };
@@ -55,7 +55,7 @@ public class Network {
     static class RaftStateMachine implements StateMachine {
         final Raft raft;
         RaftStateMachine(Raft r) { this.raft = r; }
-        @Override public RaftException step(Eraftpb.Message m) { return raft.step(m); }
+        @Override public void step(Eraftpb.Message m) throws RaftException { raft.step(m); }
         @Override public List<Eraftpb.Message> readMessages() { return raft.readMessages(); }
         @Override public void advanceMessagesAfterAppend() { raft.advanceMessagesAfterAppend(); }
     }
@@ -151,28 +151,33 @@ public class Network {
         return new RaftStateMachine(sm);
     }
 
-    public void send(Eraftpb.Message... msgs) {
+    public void send(Eraftpb.Message... msgs) throws RaftException {
         LinkedList<Eraftpb.Message> queue = new LinkedList<>(Arrays.asList(msgs));
         while (!queue.isEmpty()) {
             Eraftpb.Message m = queue.poll();
             StateMachine p = peers.get(m.getTo());
             if (p == null) continue;
-            p.step(m);
+            try {
+                p.step(m);
+            } catch (RaftException ignored) {
+                // Simulated network ignores per-message raft-layer rejections
+                // (e.g. ErrProposalDropped) and continues delivering the rest.
+            }
             p.advanceMessagesAfterAppend();
             queue.addAll(filter(p.readMessages()));
         }
     }
 
-    public void drop(long from, long to, double perc) {
+    public void drop(long from, long to, double perc) throws RaftException {
         dropm.computeIfAbsent(from, k -> new HashMap<>()).put(to, perc);
     }
 
-    public void cut(long one, long other) {
+    public void cut(long one, long other) throws RaftException {
         drop(one, other, 2.0); // always drop
         drop(other, one, 2.0);
     }
 
-    public void isolate(long id) {
+    public void isolate(long id) throws RaftException {
         for (long nid : peers.keySet()) {
             if (nid != id) {
                 drop(id, nid, 1.0);
@@ -181,11 +186,11 @@ public class Network {
         }
     }
 
-    public void ignore(Eraftpb.MessageType t) {
+    public void ignore(Eraftpb.MessageType t) throws RaftException {
         ignorem.add(t);
     }
 
-    public void recover() {
+    public void recover() throws RaftException {
         dropm.clear();
         ignorem.clear();
     }

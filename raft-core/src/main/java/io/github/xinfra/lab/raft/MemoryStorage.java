@@ -83,6 +83,7 @@ public class MemoryStorage implements Storage {
         return new InitialStateResult(hardState, cs);
     }
 
+    @Override
     public synchronized void setHardState(Eraftpb.HardState st) {
         this.hardState = st;
     }
@@ -148,6 +149,7 @@ public class MemoryStorage implements Storage {
         return snapshot;
     }
 
+    @Override
     public synchronized void applySnapshot(Eraftpb.Snapshot snap) throws RaftException {
         long msIndex = snapshot.getMetadata().getIndex();
         long snapIndex = snap.getMetadata().getIndex();
@@ -162,6 +164,7 @@ public class MemoryStorage implements Storage {
                 .build());
     }
 
+    @Override
     public synchronized Eraftpb.Snapshot createSnapshot(long i, Eraftpb.ConfState cs, byte[] data) throws RaftException {
         if (i <= snapshot.getMetadata().getIndex()) {
             throw RaftException.ErrSnapOutOfDate;
@@ -185,6 +188,7 @@ public class MemoryStorage implements Storage {
         return snapshot;
     }
 
+    @Override
     public synchronized void compact(long compactIndex) throws RaftException {
         long offset = ents.get(0).getIndex();
         if (compactIndex <= offset) {
@@ -206,6 +210,7 @@ public class MemoryStorage implements Storage {
         ents = newEnts;
     }
 
+    @Override
     public synchronized void append(List<Eraftpb.Entry> entries) {
         if (entries.isEmpty()) {
             return;

@@ -33,7 +33,7 @@ class RaftLogTest {
     // ============= TestFindConflict =============
 
     @Test
-    void testFindConflict() {
+    void testFindConflict() throws RaftException {
         List<Eraftpb.Entry> previousEnts = index(1).terms(1, 2, 3);
         Object[][] tests = {
                 {Collections.emptyList(), 0L},
@@ -103,7 +103,7 @@ class RaftLogTest {
     // ============= TestIsUpToDate =============
 
     @Test
-    void testIsUpToDate() {
+    void testIsUpToDate() throws RaftException {
         List<Eraftpb.Entry> previousEnts = index(1).terms(1, 2, 3);
         RaftLog raftLog = RaftLog.newLog(new MemoryStorage());
         raftLog.append(previousEnts);
@@ -149,7 +149,7 @@ class RaftLogTest {
     // ============= TestLogMaybeAppend =============
 
     @Test
-    void testLogMaybeAppend() {
+    void testLogMaybeAppend() throws RaftException {
         List<Eraftpb.Entry> previousEnts = index(1).terms(1, 2, 3);
         long lastindex = 3;
         long lastterm = 3;
@@ -201,7 +201,7 @@ class RaftLogTest {
     // ============= TestCommitTo =============
 
     @Test
-    void testCommitTo() {
+    void testCommitTo() throws RaftException {
         List<Eraftpb.Entry> previousEnts = index(1).terms(1, 2, 3);
         long commit = 2;
 
@@ -229,7 +229,7 @@ class RaftLogTest {
     // ============= TestStableTo =============
 
     @Test
-    void testStableTo() {
+    void testStableTo() throws RaftException {
         Object[][] tests = {
                 {1L, 1L, 2L},
                 {2L, 2L, 3L},
@@ -291,7 +291,7 @@ class RaftLogTest {
     // ============= TestNextUnstableEnts =============
 
     @Test
-    void testNextUnstableEnts() {
+    void testNextUnstableEnts() throws RaftException {
         List<Eraftpb.Entry> previousEnts = index(1).terms(1, 2);
 
         // all stable

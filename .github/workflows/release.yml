@@ -1,0 +1,69 @@
+name: release
+
+# Tag-driven release. Push an annotated tag like `v0.2.0` (or pre-release
+# `v0.2.0-rc1`) and this workflow runs the full publish pipeline that
+# `maven-publish.yml` exposes as a manual button. Tag-driven means git
+# history is the source of truth for "what is released".
+#
+# To roll a release:
+#   git tag -a v0.2.0 -m "v0.2.0"
+#   git push origin v0.2.0
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+# Prevent two release jobs from racing on the same tag.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # for GitHub Release creation
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag matches pom version
+        # The pom's <version> must equal the tag (minus the leading `v`).
+        # Catches the easy mistake of tagging without bumping the pom.
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          pom="$(mvn -q -Dexec.executable=echo -Dexec.args='${project.version}' --non-recursive exec:exec)"
+          if [ "$tag" != "$pom" ]; then
+            echo "Tag v$tag does not match pom version $pom" >&2
+            exit 1
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+          server-id: central
+          server-username: CENTRAL_USER
+          server-password: CENTRAL_PASSWD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: GPG_PASSPHRASE
+
+      - name: Maven deploy
+        run: mvn -U -B -ntp deploy -Prelease
+        env:
+          CENTRAL_USER: ${{ secrets.CENTRAL_USER }}
+          CENTRAL_PASSWD: ${{ secrets.CENTRAL_PASSWD }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Create GitHub Release
+        # Drafts a Release attached to this tag and lets release-drafter
+        # / manual editing fill in the body afterwards.
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref, '-') }}

@@ -74,7 +74,7 @@ public class RaftBenchmarks {
     private byte[] payload;
 
     @Setup(Level.Iteration)
-    public void setUp() {
+    public void setUp() throws RaftException {
         storage = new MemoryStorage();
         // Pre-set ConfState with N voters so the leader bootstraps without
         // full conf-change traffic.
@@ -106,7 +106,7 @@ public class RaftBenchmarks {
     }
 
     @TearDown(Level.Iteration)
-    public void tearDown() {
+    public void tearDown() throws RaftException {
         rn = null;
         storage = null;
     }
@@ -117,7 +117,7 @@ public class RaftBenchmarks {
      * so it isolates the local state-machine cost.
      */
     @Benchmark
-    public Ready proposeAndDrain() {
+    public Ready proposeAndDrain() throws RaftException {
         rn.propose(payload);
         Ready rd = rn.ready();
         if (!rd.entries.isEmpty()) storage.append(rd.entries);
@@ -131,7 +131,7 @@ public class RaftBenchmarks {
      * Progress.maybeUpdate / maybeCommit / Inflights.freeLE chain.
      */
     @Benchmark
-    public void leaderHandleAppendResponse() {
+    public void leaderHandleAppendResponse() throws RaftException {
         long lastIndex = rn.raft.raftLog.lastIndex();
         // Simulate every other voter ack-ing the leader's last entry.
         for (long peerId = 2; peerId <= voters; peerId++) {
@@ -161,7 +161,7 @@ public class RaftBenchmarks {
         public List<Eraftpb.Entry> batch;
 
         @Setup(Level.Invocation)
-        public void setUp() {
+        public void setUp() throws RaftException {
             unstable = new Unstable(1);
             batch = new java.util.ArrayList<>(batchSize);
             for (int i = 0; i < batchSize; i++) {
@@ -178,7 +178,7 @@ public class RaftBenchmarks {
      * an in-place removeRange.
      */
     @Benchmark
-    public void unstableStableToInChunks(UnstableState st) {
+    public void unstableStableToInChunks(UnstableState st) throws RaftException {
         int chunk = 10;
         long upTo = 0;
         while (upTo + chunk <= st.batchSize) {
@@ -200,7 +200,7 @@ public class RaftBenchmarks {
         public RaftLog raftLog;
 
         @Setup(Level.Iteration)
-        public void setUp() {
+        public void setUp() throws RaftException {
             MemoryStorage storage = new MemoryStorage();
             raftLog = RaftLog.newLog(storage);
             List<Eraftpb.Entry> batch = new java.util.ArrayList<>(logSize);
@@ -235,7 +235,7 @@ public class RaftBenchmarks {
         public io.github.xinfra.lab.raft.internal.quorum.JointConfig voters;
 
         @Setup(Level.Invocation)
-        public void setUp() {
+        public void setUp() throws RaftException {
             ro = new ReadOnly(ReadOnlyOption.ReadOnlySafe);
             io.github.xinfra.lab.raft.internal.quorum.MajorityConfig in =
                     new io.github.xinfra.lab.raft.internal.quorum.MajorityConfig(java.util.Set.of(1L, 2L, 3L));

@@ -44,7 +44,7 @@ class SingleNodeIntegrationTest {
             assertThat(awaitTrue(() -> p.basicStatus().state == RaftStateType.StateLeader, 5_000))
                     .as("single node must elect itself").isTrue();
 
-            assertThat(p.propose("hello".getBytes())).isNull();
+            p.propose("hello".getBytes());
             assertThat(awaitTrue(() -> !applied.isEmpty(), 5_000)).isTrue();
             assertThat(applied).hasSize(1);
             assertThat(applied.values().iterator().next()).isEqualTo("hello".getBytes());
@@ -67,7 +67,7 @@ class SingleNodeIntegrationTest {
             assertThat(awaitTrue(() -> p.basicStatus().state == RaftStateType.StateLeader, 5_000)).isTrue();
 
             for (int i = 0; i < 25; i++) {
-                assertThat(p.propose(("v" + i).getBytes())).isNull();
+                p.propose(("v" + i).getBytes());
             }
             assertThat(awaitTrue(() -> appliedInOrder.size() == 25, 10_000))
                     .as("all 25 proposals must apply").isTrue();

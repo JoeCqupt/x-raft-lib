@@ -174,8 +174,12 @@ public final class KvClusterDemo {
         while (System.currentTimeMillis() < deadline) {
             RaftPeer leader = findLeader(peers);
             if (leader != null) {
-                RaftException err = leader.propose(cmd.serialize());
-                if (err == null) return;           // accepted
+                try {
+                    leader.propose(cmd.serialize());
+                    return;                         // accepted
+                } catch (RaftException ignored) {
+                    // dropped (e.g. lost leadership mid-propose) — fall through to retry
+                }
             }
             Thread.sleep(25);                       // no leader yet, or rejected — retry
         }

@@ -58,7 +58,7 @@ public class Status {
     public static Status getStatus(Raft r) {
         Status s = new Status();
         s.basicStatus = getBasicStatus(r);
-        if (s.basicStatus.softState.raftState == RaftStateType.StateLeader) {
+        if (s.basicStatus.softState.raftState() == RaftStateType.StateLeader) {
             s.progress = new HashMap<>();
             r.trk.visit((id, pr) -> s.progress.put(id, toPeerProgress(pr)));
         }
@@ -115,8 +115,8 @@ public class Status {
                 basicStatus.hardState.getTerm(),
                 basicStatus.hardState.getVote(),
                 basicStatus.hardState.getCommit(),
-                basicStatus.softState.lead,
-                basicStatus.softState.raftState,
+                basicStatus.softState.lead(),
+                basicStatus.softState.raftState(),
                 basicStatus.applied));
 
         if (progress == null || progress.isEmpty()) {

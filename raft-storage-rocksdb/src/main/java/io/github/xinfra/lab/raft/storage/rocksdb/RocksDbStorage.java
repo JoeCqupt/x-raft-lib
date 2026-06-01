@@ -636,10 +636,22 @@ public class RocksDbStorage implements Storage, AutoCloseable {
         if (closed) return;
         closed = true;
         for (ColumnFamilyHandle h : cfHandles) {
-            try { h.close(); } catch (Throwable ignored) { /* leaking native handle on shutdown is fine */ }
+            try {
+                h.close();
+            } catch (Throwable t) {
+                LOG.warn("close column-family handle failed: {}", t.toString());
+            }
         }
-        try { writeOpts.close(); } catch (Throwable ignored) {}
-        try { db.close(); } catch (Throwable ignored) {}
+        try {
+            writeOpts.close();
+        } catch (Throwable t) {
+            LOG.warn("close writeOpts failed: {}", t.toString());
+        }
+        try {
+            db.close();
+        } catch (Throwable t) {
+            LOG.warn("close db failed: {}", t.toString());
+        }
     }
 
     // ====================== Applied-index watermark ======================

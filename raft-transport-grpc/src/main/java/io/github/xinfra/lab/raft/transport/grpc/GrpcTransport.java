@@ -320,7 +320,13 @@ public class GrpcTransport implements Transport {
                     sendUnary(msg);
                 }
             } catch (Throwable t) {
-                LOG.debug("send to peer {} failed: {}", peerId, t.toString());
+                // WARN (not debug) so silent network death is visible without
+                // having to drop the logger threshold across the whole tree.
+                // Hosts should additionally call Node.reportUnreachable(peerId)
+                // when they observe persistent send failures — wiring that
+                // through a Transport-level callback is intentionally left to
+                // a follow-up so this PR stays focused on the core API.
+                LOG.warn("send to peer {} failed: {}", peerId, t.toString());
             }
         }
 

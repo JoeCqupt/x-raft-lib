@@ -35,24 +35,36 @@ public interface Node {
 
     /**
      * Campaign causes the Node to transition to candidate state and start campaigning to become leader.
+     *
+     * @throws RaftException {@link RaftException#ErrStopped} if the node has been stopped.
      */
-    RaftException campaign() throws InterruptedException;
+    void campaign() throws InterruptedException, RaftException;
 
     /**
      * Propose proposes that data be appended to the log. Note that proposals can be lost without
      * notice, therefore it is user's job to ensure proposal retries.
+     *
+     * @throws RaftException {@link RaftException#ErrStopped} if the node has been stopped;
+     *                       {@link RaftException#ErrProposalDropped} if raft dropped the proposal
+     *                       (e.g. no leader, leadership transfer in progress, follower removed).
      */
-    RaftException propose(byte[] data) throws InterruptedException;
+    void propose(byte[] data) throws InterruptedException, RaftException;
 
     /**
      * ProposeConfChange proposes a configuration change.
+     *
+     * @throws RaftException see {@link #propose(byte[])} for codes.
      */
-    RaftException proposeConfChange(Eraftpb.ConfChangeV2 cc) throws InterruptedException;
+    void proposeConfChange(Eraftpb.ConfChangeV2 cc) throws InterruptedException, RaftException;
 
     /**
      * Step advances the state machine using the given message.
+     *
+     * @throws RaftException {@link RaftException#ErrStopped} if the node has been stopped, or
+     *                       {@link RaftException#ErrProposalDropped} for a forwarded MsgPropose
+     *                       that the local node refuses (e.g. proposals disabled).
      */
-    RaftException step(Eraftpb.Message msg) throws InterruptedException;
+    void step(Eraftpb.Message msg) throws InterruptedException, RaftException;
 
     /**
      * Ready returns the current point-in-time state.
@@ -80,13 +92,17 @@ public interface Node {
 
     /**
      * ForgetLeader forgets a follower's current leader, changing it to None.
+     *
+     * @throws RaftException {@link RaftException#ErrStopped} if the node has been stopped.
      */
-    RaftException forgetLeader() throws InterruptedException;
+    void forgetLeader() throws InterruptedException, RaftException;
 
     /**
      * ReadIndex requests a read state.
+     *
+     * @throws RaftException {@link RaftException#ErrStopped} if the node has been stopped.
      */
-    RaftException readIndex(byte[] rctx) throws InterruptedException;
+    void readIndex(byte[] rctx) throws InterruptedException, RaftException;
 
     /**
      * Status returns the current status of the raft state machine.

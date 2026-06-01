@@ -15,6 +15,7 @@
  */
 package io.github.xinfra.lab.raft.examples;
 
+import io.github.xinfra.lab.raft.RaftException;
 import org.junit.jupiter.api.Test;
 
 
@@ -29,7 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class KVClusterTest {
 
     @Test
-    void putGetDeleteReplicatesAcrossCluster() {
+    void putGetDeleteReplicatesAcrossCluster() throws RaftException {
         KVCluster cluster = new KVCluster(1, 2, 3);
         cluster.electLeader(1);
 
@@ -37,9 +38,9 @@ class KVClusterTest {
         assertThat(cluster.leader().id).isEqualTo(1L);
 
         // Put a few keys via the leader.
-        assertThat(cluster.put("k1", "v1")).isNull();
-        assertThat(cluster.put("k2", "v2")).isNull();
-        assertThat(cluster.put("k3", "v3")).isNull();
+        cluster.put("k1", "v1");
+        cluster.put("k2", "v2");
+        cluster.put("k3", "v3");
 
         // All three nodes' state machines converge.
         for (long id : new long[]{1, 2, 3}) {
@@ -51,8 +52,8 @@ class KVClusterTest {
         }
 
         // Update + delete round-trip.
-        assertThat(cluster.put("k1", "v1-updated")).isNull();
-        assertThat(cluster.delete("k2")).isNull();
+        cluster.put("k1", "v1-updated");
+        cluster.delete("k2");
 
         for (long id : new long[]{1, 2, 3}) {
             KVStore s = cluster.node(id).kvStore;
@@ -64,7 +65,7 @@ class KVClusterTest {
     }
 
     @Test
-    void commandSerializationRoundTrip() {
+    void commandSerializationRoundTrip() throws RaftException {
         KVStore.Command put = new KVStore.Command(KVStore.Command.Op.PUT, "foo", "bar baz");
         KVStore.Command parsed = KVStore.Command.deserialize(put.serialize());
         assertThat(parsed.op).isEqualTo(KVStore.Command.Op.PUT);

@@ -27,6 +27,7 @@ import java.util.concurrent.TimeUnit;
 
 import static io.github.xinfra.lab.raft.internal.TestUtil.*;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Tests for the Node interface (DefaultNode), mirroring etcd-raft node_test.go.
@@ -38,7 +39,7 @@ class NodeTest {
      * the leader when DisableProposalForwarding is true.
      */
     @Test
-    void testDisableProposalForwarding() {
+    void testDisableProposalForwarding() throws RaftException {
         Raft r1 = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft r2 = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Config cfg3 = newTestConfig(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -64,10 +65,12 @@ class NodeTest {
         // verify r2(follower) does forward the proposal
         assertThat(r2.msgs).hasSize(1);
 
-        // send proposal to r3(follower) where DisableProposalForwarding is true
-        r3.step(Eraftpb.Message.newBuilder().setFrom(3).setTo(3)
+        // send proposal to r3(follower) where DisableProposalForwarding is true.
+        // r3 now throws ErrProposalDropped instead of returning it; assert that.
+        assertThatThrownBy(() -> r3.step(Eraftpb.Message.newBuilder().setFrom(3).setTo(3)
                 .setMsgType(Eraftpb.MessageType.MsgPropose)
-                .addAllEntries(testEntries).build());
+                .addAllEntries(testEntries).build()))
+                .isEqualTo(RaftException.ErrProposalDropped);
 
         // verify r3(follower) does not forward the proposal
         assertThat(r3.msgs).isEmpty();
@@ -78,7 +81,7 @@ class NodeTest {
      * forwarded to the new leader and 'send' does not attach its term.
      */
     @Test
-    void testNodeReadIndexToOldLeader() {
+    void testNodeReadIndexToOldLeader() throws RaftException {
         Raft r1 = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft r2 = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft r3 = newTestRaft(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -141,23 +144,18 @@ class NodeTest {
      * TestSoftStateEqual tests SoftState's equals/hashCode.
      */
     @Test
-    void testSoftStateEqual() {
-        assertThat(new SoftState()).isEqualTo(new SoftState());
-
-        SoftState s1 = new SoftState();
-        s1.lead = 1;
-        assertThat(s1).isNotEqualTo(new SoftState());
-
-        SoftState s2 = new SoftState();
-        s2.raftState = RaftStateType.StateLeader;
-        assertThat(s2).isNotEqualTo(new SoftState());
+    void testSoftStateEqual() throws RaftException {
+        SoftState zero = new SoftState(0L, null);
+        assertThat(zero).isEqualTo(new SoftState(0L, null));
+        assertThat(new SoftState(1L, null)).isNotEqualTo(zero);
+        assertThat(new SoftState(0L, RaftStateType.StateLeader)).isNotEqualTo(zero);
     }
 
     /**
      * TestIsHardStateEqual tests Util.isHardStateEqual().
      */
     @Test
-    void testIsHardStateEqual() {
+    void testIsHardStateEqual() throws RaftException {
         Eraftpb.HardState empty = Eraftpb.HardState.getDefaultInstance();
         assertThat(Util.isHardStateEqual(empty, empty)).isTrue();
         assertThat(Util.isHardStateEqual(
@@ -395,7 +393,7 @@ class NodeTest {
      * TestAppendPagination ensures that MsgApp payloads are split when they exceed MaxSizePerMsg.
      */
     @Test
-    void testAppendPagination() {
+    void testAppendPagination() throws RaftException {
         final int maxSizePerMsg = 2048;
         Network n = Network.newNetworkWithConfig(c -> {
             c.maxSizePerMsg = maxSizePerMsg;
@@ -442,7 +440,7 @@ class NodeTest {
      * TestCommitPagination verifies that MaxCommittedSizePerReady works correctly.
      */
     @Test
-    void testCommitPagination() {
+    void testCommitPagination() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
         Config cfg = newTestConfig(1, 10, 1, s);
         cfg.maxSizePerMsg = NO_LIMIT;
@@ -486,7 +484,7 @@ class NodeTest {
      * TestNodeProposeConfig ensures that node.ProposeConfChange sends the proposal.
      */
     @Test
-    void testNodeProposeConfig() {
+    void testNodeProposeConfig() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
         Config cfg = newTestConfig(1, 10, 1, s);
         cfg.maxSizePerMsg = NO_LIMIT;
@@ -617,7 +615,7 @@ class NodeTest {
      * TestNodeStart ensures a node can be started correctly with proper initial Ready output.
      */
     @Test
-    void testNodeStart() {
+    void testNodeStart() throws RaftException {
         MemoryStorage s = new MemoryStorage();
         Config cfg = newTestConfig(1, 10, 1, s);
         cfg.maxSizePerMsg = NO_LIMIT;
@@ -641,7 +639,7 @@ class NodeTest {
      * TestNodeRestart ensures that a node can be restarted from persistent state.
      */
     @Test
-    void testNodeRestart() {
+    void testNodeRestart() throws RaftException {
         List<Eraftpb.Entry> entries = List.of(
                 Eraftpb.Entry.newBuilder().setTerm(1).setIndex(1).build(),
                 Eraftpb.Entry.newBuilder().setTerm(1).setIndex(2)
@@ -711,7 +709,7 @@ class NodeTest {
      * TestNodeAdvance ensures that Advance triggers delivery of committed entries.
      */
     @Test
-    void testNodeAdvance() {
+    void testNodeAdvance() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
         Config cfg = newTestConfig(1, 10, 1, s);
         cfg.maxSizePerMsg = NO_LIMIT;
@@ -747,7 +745,7 @@ class NodeTest {
      * TestNodeProposeAddLearnerNode ensures that proposing a learner conf change works.
      */
     @Test
-    void testNodeProposeAddLearnerNode() {
+    void testNodeProposeAddLearnerNode() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
         Config cfg = newTestConfig(1, 10, 1, s);
         cfg.maxSizePerMsg = NO_LIMIT;
@@ -794,7 +792,7 @@ class NodeTest {
      * commit index could regress after restart due to size limiting.
      */
     @Test
-    void testNodeCommitPaginationAfterRestart() {
+    void testNodeCommitPaginationAfterRestart() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
         Eraftpb.HardState persistedHardState = Eraftpb.HardState.newBuilder()
                 .setTerm(1).setVote(1).setCommit(10).build();
@@ -862,15 +860,14 @@ class NodeTest {
             if (rd == null) break;
             s.append(rd.entries);
             n.advance();
-            if (rd.softState != null && rd.softState.lead != Util.NONE) {
+            if (rd.softState != null && rd.softState.lead() != Util.NONE) {
                 elected = true;
             }
         }
         assertThat(elected).as("leader should be elected").isTrue();
 
         // Now propose should succeed since we have a leader
-        RaftException err = n.propose("somedata".getBytes());
-        assertThat(err).isNull();
+        n.propose("somedata".getBytes());
 
         n.stop();
     }
@@ -926,8 +923,10 @@ class NodeTest {
             try {
                 // This propose will wait for the result, which blocks until the
                 // event loop processes it or the node is stopped.
-                RaftException err = n.propose("somedata".getBytes());
-                errFuture.complete(err);
+                n.propose("somedata".getBytes());
+                errFuture.complete(null);
+            } catch (RaftException re) {
+                errFuture.complete(re);
             } catch (InterruptedException e) {
                 errFuture.complete(RaftException.ErrStopped);
             }
@@ -981,7 +980,7 @@ class NodeTest {
             if (rd == null) break;
             s.append(rd.entries);
             n.advance();
-            if (rd.softState != null && rd.softState.lead != Util.NONE) {
+            if (rd.softState != null && rd.softState.lead() != Util.NONE) {
                 elected = true;
             }
         }
@@ -993,19 +992,14 @@ class NodeTest {
             if (m.getMsgType() == Eraftpb.MessageType.MsgPropose) {
                 for (Eraftpb.Entry e : m.getEntriesList()) {
                     if (e.getData().toStringUtf8().contains("test_dropping")) {
-                        return RaftException.ErrProposalDropped;
+                        throw RaftException.ErrProposalDropped;
                     }
                 }
             }
-            if (m.getMsgType() == Eraftpb.MessageType.MsgAppendResponse) {
-                return null;
-            }
-            return null;
         };
 
         // Propose with the dropping message - should get ErrProposalDropped
-        RaftException err = n.propose(droppingMsg);
-        assertThat(err).isEqualTo(RaftException.ErrProposalDropped);
+        assertThatThrownBy(() -> n.propose(droppingMsg)).isEqualTo(RaftException.ErrProposalDropped);
 
         n.stop();
     }
@@ -1190,8 +1184,7 @@ class NodeTest {
 
         // After self-removal, propose must short-circuit at the producer
         // boundary with ErrProposalDropped.
-        RaftException err = n.propose("data".getBytes());
-        assertThat(err).isEqualTo(RaftException.ErrProposalDropped);
+        assertThatThrownBy(() -> n.propose("data".getBytes())).isEqualTo(RaftException.ErrProposalDropped);
 
         // Forwarded proposals via step() should also be rejected.
         Eraftpb.Message forwarded = Eraftpb.Message.newBuilder()
@@ -1200,7 +1193,7 @@ class NodeTest {
                 .addEntries(Eraftpb.Entry.newBuilder()
                         .setData(ByteString.copyFromUtf8("via-step")))
                 .build();
-        assertThat(n.step(forwarded)).isEqualTo(RaftException.ErrProposalDropped);
+        assertThatThrownBy(() -> n.step(forwarded)).isEqualTo(RaftException.ErrProposalDropped);
 
         n.stop();
     }
@@ -1212,7 +1205,7 @@ class NodeTest {
      * paths in {@code applyConfChange} and was previously off by a few cases.
      */
     @Test
-    void testApplyConfChangeTransitionMatrix() {
+    void testApplyConfChangeTransitionMatrix() throws RaftException {
         // Empty changes + Auto transition → LeaveJoint.
         Eraftpb.ConfChangeV2 leaveJoint = Eraftpb.ConfChangeV2.newBuilder().build();
         assertThat(Raft.leaveJoint(leaveJoint)).isTrue();

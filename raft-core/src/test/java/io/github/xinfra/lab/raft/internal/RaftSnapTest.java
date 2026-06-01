@@ -40,7 +40,7 @@ class RaftSnapTest {
             .build();
 
     @Test
-    void testSendingSnapshotSetPendingSnapshot() {
+    void testSendingSnapshotSetPendingSnapshot() throws RaftException {
         MemoryStorage storage = newTestMemoryStorage(withPeers(1));
         Raft sm = newTestRaft(1, 10, 1, storage);
         sm.restore(TESTING_SNAP);
@@ -62,7 +62,7 @@ class RaftSnapTest {
     }
 
     @Test
-    void testPendingSnapshotPauseReplication() {
+    void testPendingSnapshotPauseReplication() throws RaftException {
         MemoryStorage storage = newTestMemoryStorage(withPeers(1, 2));
         Raft sm = newTestRaft(1, 10, 1, storage);
         sm.restore(TESTING_SNAP);
@@ -82,7 +82,7 @@ class RaftSnapTest {
     }
 
     @Test
-    void testSnapshotFailure() {
+    void testSnapshotFailure() throws RaftException {
         MemoryStorage storage = newTestMemoryStorage(withPeers(1, 2));
         Raft sm = newTestRaft(1, 10, 1, storage);
         sm.restore(TESTING_SNAP);
@@ -106,7 +106,7 @@ class RaftSnapTest {
     }
 
     @Test
-    void testSnapshotSucceed() {
+    void testSnapshotSucceed() throws RaftException {
         MemoryStorage storage = newTestMemoryStorage(withPeers(1, 2));
         Raft sm = newTestRaft(1, 10, 1, storage);
         sm.restore(TESTING_SNAP);
@@ -130,7 +130,7 @@ class RaftSnapTest {
     }
 
     @Test
-    void testSnapshotAbort() {
+    void testSnapshotAbort() throws RaftException {
         MemoryStorage storage = newTestMemoryStorage(withPeers(1, 2));
         Raft sm = newTestRaft(1, 10, 1, storage);
         sm.restore(TESTING_SNAP);

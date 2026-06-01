@@ -96,7 +96,7 @@ public class Raft {
 
     @FunctionalInterface
     interface StepFunction {
-        RaftException step(Raft r, Eraftpb.Message m);
+        void step(Raft r, Eraftpb.Message m) throws RaftException;
     }
 
     // ============= newRaft =============
@@ -351,11 +351,11 @@ public class Raft {
 
         if (trk.getConfig().isAutoLeave() && newApplied >= pendingConfIndex && state == RaftStateType.StateLeader) {
             Eraftpb.Message m = io.github.xinfra.lab.raft.internal.confchange.Changer.toMessage(null);
-            RaftException err = step(m);
-            if (err != null) {
-                logger.debug("not initiating automatic transition out of joint configuration {}: {}", trk.getConfig(), err);
-            } else {
+            try {
+                step(m);
                 logger.info("initiating automatic transition out of joint configuration {}", trk.getConfig());
+            } catch (RaftException err) {
+                logger.debug("not initiating automatic transition out of joint configuration {}: {}", trk.getConfig(), err);
             }
         }
     }
@@ -445,10 +445,11 @@ public class Raft {
         electionElapsed++;
         if (promotable() && pastElectionTimeout()) {
             electionElapsed = 0;
-            step(Eraftpb.Message.newBuilder()
-                    .setFrom(id)
-                    .setMsgType(Eraftpb.MessageType.MsgHup)
-                    .build());
+            // Self-step a local MsgHup. Local messages never throw
+            // RaftException (ErrProposalDropped is MsgPropose-only); catch
+            // defensively so a future change in step() can't propagate a
+            // checked exception out of the Runnable tick contract.
+            stepLocalSafely(Eraftpb.MessageType.MsgHup);
         }
     }
 
@@ -459,10 +460,7 @@ public class Raft {
         if (electionElapsed >= electionTimeout) {
             electionElapsed = 0;
             if (checkQuorum) {
-                step(Eraftpb.Message.newBuilder()
-                        .setFrom(id)
-                        .setMsgType(Eraftpb.MessageType.MsgCheckQuorum)
-                        .build());
+                stepLocalSafely(Eraftpb.MessageType.MsgCheckQuorum);
             }
             if (state == RaftStateType.StateLeader && leadTransferee != Util.NONE) {
                 abortLeaderTransfer();
@@ -475,10 +473,20 @@ public class Raft {
 
         if (heartbeatElapsed >= heartbeatTimeout) {
             heartbeatElapsed = 0;
-            step(Eraftpb.Message.newBuilder()
-                    .setFrom(id)
-                    .setMsgType(Eraftpb.MessageType.MsgBeat)
-                    .build());
+            stepLocalSafely(Eraftpb.MessageType.MsgBeat);
+        }
+    }
+
+    /**
+     * Self-step a local MsgHup/MsgBeat/MsgCheckQuorum. These message types
+     * never raise RaftException (only MsgPropose does); the catch is purely
+     * defensive so the {@link Runnable} tick contract is preserved.
+     */
+    private void stepLocalSafely(Eraftpb.MessageType type) {
+        try {
+            step(Eraftpb.Message.newBuilder().setFrom(id).setMsgType(type).build());
+        } catch (RaftException e) {
+            logger.error("{:x} unexpected RaftException from local {} step: {}", id, type, e);
         }
     }
 
@@ -638,7 +646,7 @@ public class Raft {
     }
 
     // ============= Step =============
-    public RaftException step(Eraftpb.Message m) {
+    public void step(Eraftpb.Message m) throws RaftException {
         StateTrace.traceReceiveMessage(this, m);
 
         // Handle the message term
@@ -649,7 +657,7 @@ public class Raft {
                 boolean force = m.getContext().toStringUtf8().equals("CampaignTransfer");
                 boolean inLease = checkQuorum && lead != Util.NONE && electionElapsed < electionTimeout;
                 if (!force && inLease) {
-                    return null;
+                    return;
                 }
             }
             if (m.getMsgType() == Eraftpb.MessageType.MsgRequestPreVote) {
@@ -691,7 +699,7 @@ public class Raft {
                 logger.info("{:x} [term: {}] ignored a {} message with lower term from {:x} [term: {}]",
                         id, term, m.getMsgType(), m.getFrom(), m.getTerm());
             }
-            return null;
+            return;
         }
 
         switch (m.getMsgType()) {
@@ -744,17 +752,16 @@ public class Raft {
             }
 
             default:
-                return stepFn.step(this, m);
+                stepFn.step(this, m);
         }
-        return null;
     }
 
     // ============= stepLeader =============
-    static RaftException stepLeader(Raft r, Eraftpb.Message m) {
+    static void stepLeader(Raft r, Eraftpb.Message m) throws RaftException {
         switch (m.getMsgType()) {
             case MsgBeat:
                 r.bcastHeartbeat();
-                return null;
+                return;
             case MsgCheckQuorum:
                 if (!r.trk.quorumActive()) {
                     r.logger.warn("{:x} stepped down to follower since quorum is not active", r.id);
@@ -765,20 +772,20 @@ public class Raft {
                         pr.setRecentActive(false);
                     }
                 });
-                return null;
+                return;
             case MsgPropose:
                 if (m.getEntriesCount() == 0) {
                     throw new RaftInvariantException(String.format("%x stepped empty MsgProp", r.id));
                 }
                 if (r.trk.getProgress().get(r.id) == null) {
                     r.metrics.onProposal(RaftMetrics.ProposalResult.DROPPED);
-                    return RaftException.ErrProposalDropped;
+                    throw RaftException.ErrProposalDropped;
                 }
                 if (r.leadTransferee != Util.NONE) {
                     r.logger.debug("{:x} [term {}] transfer leadership to {:x} is in progress; dropping proposal",
                             r.id, r.term, r.leadTransferee);
                     r.metrics.onProposal(RaftMetrics.ProposalResult.DROPPED);
-                    return RaftException.ErrProposalDropped;
+                    throw RaftException.ErrProposalDropped;
                 }
 
                 List<Eraftpb.Entry> entries = new ArrayList<>(m.getEntriesList());
@@ -839,11 +846,11 @@ public class Raft {
 
                 if (!r.appendEntry(entries)) {
                     r.metrics.onProposal(RaftMetrics.ProposalResult.DROPPED);
-                    return RaftException.ErrProposalDropped;
+                    throw RaftException.ErrProposalDropped;
                 }
                 r.metrics.onProposal(RaftMetrics.ProposalResult.ACCEPTED);
                 r.bcastAppend();
-                return null;
+                return;
 
             case MsgReadIndex:
                 if (r.trk.isSingleton()) {
@@ -851,17 +858,17 @@ public class Raft {
                     if (resp.getTo() != Util.NONE) {
                         r.send(resp.toBuilder());
                     }
-                    return null;
+                    return;
                 }
                 if (!r.committedEntryInCurrentTerm()) {
                     r.appendPendingReadIndex(m);
-                    return null;
+                    return;
                 }
                 sendMsgReadIndexResponse(r, m);
-                return null;
+                return;
 
             case MsgForgetLeader:
-                return null;
+                return;
 
             default:
                 break;
@@ -871,7 +878,7 @@ public class Raft {
         Progress pr = r.trk.getProgress().get(m.getFrom());
         if (pr == null) {
             r.logger.debug("{:x} no progress available for {:x}", r.id, m.getFrom());
-            return null;
+            return;
         }
 
         switch (m.getMsgType()) {
@@ -942,7 +949,7 @@ public class Raft {
                     r.sendAppend(m.getFrom());
                 }
                 if (r.readOnly.option != ReadOnlyOption.ReadOnlySafe || m.getContext().isEmpty()) {
-                    return null;
+                    return;
                 }
                 r.readOnly.recvAck(m.getFrom(), m.getContext().toByteArray());
                 List<ReadOnly.ReadIndexRequest> rss = r.readOnly.maybeAdvance(r.trk.getConfig().getVoters());
@@ -958,7 +965,7 @@ public class Raft {
 
             case MsgSnapStatus:
                 if (pr.getState() != StateType.StateSnapshot) {
-                    return null;
+                    return;
                 }
                 if (!m.getReject()) {
                     pr.becomeProbe();
@@ -981,18 +988,18 @@ public class Raft {
             case MsgTransferLeader:
                 if (pr.isLearner()) {
                     r.logger.debug("{:x} is learner. Ignored transferring leadership", r.id);
-                    return null;
+                    return;
                 }
                 long leadTransferee = m.getFrom();
                 long lastLeadTransferee = r.leadTransferee;
                 if (lastLeadTransferee != Util.NONE) {
                     if (lastLeadTransferee == leadTransferee) {
-                        return null;
+                        return;
                     }
                     r.abortLeaderTransfer();
                 }
                 if (leadTransferee == r.id) {
-                    return null;
+                    return;
                 }
                 r.logger.info("{:x} [term {}] starts to transfer leadership to {:x}", r.id, r.term, leadTransferee);
                 r.electionElapsed = 0;
@@ -1004,11 +1011,11 @@ public class Raft {
                 }
                 break;
         }
-        return null;
+        return;
     }
 
     // ============= stepCandidate =============
-    static RaftException stepCandidate(Raft r, Eraftpb.Message m) {
+    static void stepCandidate(Raft r, Eraftpb.Message m) throws RaftException {
         Eraftpb.MessageType myVoteRespType = (r.state == RaftStateType.StatePreCandidate) ?
                 Eraftpb.MessageType.MsgRequestPreVoteResponse :
                 Eraftpb.MessageType.MsgRequestVoteResponse;
@@ -1016,7 +1023,7 @@ public class Raft {
         switch (m.getMsgType()) {
             case MsgPropose:
                 r.logger.info("{:x} no leader at term {}; dropping proposal", r.id, r.term);
-                return RaftException.ErrProposalDropped;
+                throw RaftException.ErrProposalDropped;
             case MsgAppend:
                 r.becomeFollower(m.getTerm(), m.getFrom());
                 r.handleAppendEntries(m);
@@ -1052,19 +1059,19 @@ public class Raft {
                 }
                 break;
         }
-        return null;
+        return;
     }
 
     // ============= stepFollower =============
-    static RaftException stepFollower(Raft r, Eraftpb.Message m) {
+    static void stepFollower(Raft r, Eraftpb.Message m) throws RaftException {
         switch (m.getMsgType()) {
             case MsgPropose:
                 if (r.lead == Util.NONE) {
                     r.logger.info("{:x} no leader at term {}; dropping proposal", r.id, r.term);
-                    return RaftException.ErrProposalDropped;
+                    throw RaftException.ErrProposalDropped;
                 } else if (r.disableProposalForwarding) {
                     r.logger.info("{:x} not forwarding to leader {:x} at term {}; dropping proposal", r.id, r.lead, r.term);
-                    return RaftException.ErrProposalDropped;
+                    throw RaftException.ErrProposalDropped;
                 }
                 r.send(m.toBuilder().setTo(r.lead));
                 break;
@@ -1085,14 +1092,14 @@ public class Raft {
                 break;
             case MsgTransferLeader:
                 if (r.lead == Util.NONE) {
-                    return null;
+                    return;
                 }
                 r.send(m.toBuilder().setTo(r.lead));
                 break;
             case MsgForgetLeader:
                 if (r.readOnly.option == ReadOnlyOption.ReadOnlyLeaseBased) {
                     r.logger.error("ignoring MsgForgetLeader due to ReadOnlyLeaseBased");
-                    return null;
+                    return;
                 }
                 if (r.lead != Util.NONE) {
                     r.logger.info("{:x} forgetting leader {:x} at term {}", r.id, r.lead, r.term);
@@ -1106,19 +1113,19 @@ public class Raft {
                 break;
             case MsgReadIndex:
                 if (r.lead == Util.NONE) {
-                    return null;
+                    return;
                 }
                 r.send(m.toBuilder().setTo(r.lead));
                 break;
             case MsgReadIndexResp:
                 if (m.getEntriesCount() != 1) {
                     r.logger.error("{:x} invalid format of MsgReadIndexResp from {:x}, entries count: {}", r.id, m.getFrom(), m.getEntriesCount());
-                    return null;
+                    return;
                 }
                 r.appendReadState(new ReadState(m.getIndex(), m.getEntries(0).getData().toByteArray()));
                 break;
         }
-        return null;
+        return;
     }
 
     // ============= handleAppendEntries / handleHeartbeat / handleSnapshot =============
@@ -1473,7 +1480,15 @@ public class Raft {
     void stepOrSend(List<Eraftpb.Message> messages) {
         for (Eraftpb.Message m : messages) {
             if (m.getTo() == id) {
-                step(m);
+                // Self-delivered messages from msgsAfterAppend (vote / append
+                // responses, etc.) are never MsgPropose, so step never raises.
+                // Defensive catch to keep the void signature.
+                try {
+                    step(m);
+                } catch (RaftException e) {
+                    logger.error("{:x} unexpected RaftException from self-step {}: {}",
+                            id, m.getMsgType(), e);
+                }
             } else {
                 msgs.add(m);
             }

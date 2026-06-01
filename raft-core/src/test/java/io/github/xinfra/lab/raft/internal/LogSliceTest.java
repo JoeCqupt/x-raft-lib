@@ -30,7 +30,7 @@ import static org.assertj.core.api.Assertions.*;
 class LogSliceTest {
 
     @Test
-    void testEntryID() {
+    void testEntryID() throws RaftException {
         assertThat(new EntryID(5, 10)).isEqualTo(new EntryID(5, 10));
         assertThat(new EntryID(4, 10)).isNotEqualTo(new EntryID(5, 10));
         assertThat(new EntryID(5, 9)).isNotEqualTo(new EntryID(5, 10));
@@ -49,7 +49,7 @@ class LogSliceTest {
     }
 
     @Test
-    void testLogSlice() {
+    void testLogSlice() throws RaftException {
         // Empty "dummy" slice at (0,0) origin
         assertValid(0, id(0, 0), List.of(), id(0, 0));
 
@@ -82,14 +82,14 @@ class LogSliceTest {
         assertValid(10, id(12, 2), List.of(e(13, 2), e(14, 3)), id(14, 3));
     }
 
-    private void assertValid(long term, EntryID prev, List<Eraftpb.Entry> entries, EntryID expectedLast) {
+    private void assertValid(long term, EntryID prev, List<Eraftpb.Entry> entries, EntryID expectedLast) throws RaftException {
         LogSlice s = new LogSlice(term, prev, entries);
         assertThat(s.validate()).isNull();
         assertThat(s.lastEntryID()).isEqualTo(expectedLast);
         assertThat(s.lastIndex()).isEqualTo(expectedLast.index());
     }
 
-    private void assertInvalid(long term, EntryID prev, List<Eraftpb.Entry> entries) {
+    private void assertInvalid(long term, EntryID prev, List<Eraftpb.Entry> entries) throws RaftException {
         LogSlice s = new LogSlice(term, prev, entries);
         assertThat(s.validate()).isNotNull();
     }

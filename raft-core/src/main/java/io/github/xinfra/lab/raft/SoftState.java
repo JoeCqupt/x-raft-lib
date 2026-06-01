@@ -15,32 +15,12 @@
  */
 package io.github.xinfra.lab.raft;
 
-import java.util.Objects;
-
 /**
  * SoftState provides state that is useful for logging and debugging.
  * The state is volatile and does not need to be persisted to the WAL.
+ *
+ * <p>Immutable value type — equals / hashCode / toString are auto-generated
+ * by the record.
  */
-public class SoftState {
-    public long lead;
-    public RaftStateType raftState;
-
-    public SoftState() {}
-
-    public SoftState(long lead, RaftStateType raftState) {
-        this.lead = lead;
-        this.raftState = raftState;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof SoftState other)) return false;
-        return lead == other.lead && raftState == other.raftState;
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(lead, raftState);
-    }
+public record SoftState(long lead, RaftStateType raftState) {
 }

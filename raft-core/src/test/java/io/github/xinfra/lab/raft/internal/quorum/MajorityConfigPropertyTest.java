@@ -137,7 +137,7 @@ class MajorityConfigPropertyTest {
      * any index is "committed" by definition); voteResult must return VoteWon.
      */
     @Property(tries = 50)
-    void emptyVoterSetEdgeCase(@ForAll long seed) {
+    void emptyVoterSetEdgeCase(@ForAll long seed) throws RaftException {
         MajorityConfig cfg = new MajorityConfig();
         assertThat(cfg.committedIndex(MajorityConfigPropertyTestSupport.fixed(100L))).isEqualTo(Long.MAX_VALUE);
         assertThat(cfg.voteResult(new HashMap<>())).isEqualTo(VoteResult.VoteWon);

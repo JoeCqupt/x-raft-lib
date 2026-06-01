@@ -94,6 +94,13 @@ public class DefaultNode implements Node {
     private final AtomicLong liveTerm = new AtomicLong();
     private final AtomicLong liveLead = new AtomicLong(Util.NONE);
     private final AtomicLong liveCommit = new AtomicLong();
+    // Mirrors raftLog.applied / lastIndex so basicStatus() never reads a long
+    // field directly off the event-loop's mutable Raft state. A plain read of
+    // `raftLog.applied` from a non-loop thread can tear on a 32-bit JVM and
+    // sees an inconsistent value mid-update on 64-bit. Mirrored every loop
+    // iteration after `applied` and `lastIndex` are recomputed.
+    private final AtomicLong liveApplied = new AtomicLong();
+    private final AtomicLong liveLastIndex = new AtomicLong();
     private volatile RaftStateType liveState = RaftStateType.StateFollower;
 
     // ---- Leader-change observers ----
@@ -194,6 +201,8 @@ public class DefaultNode implements Node {
                     liveTerm.lazySet(r.term);
                     liveLead.lazySet(r.lead);
                     liveCommit.lazySet(r.raftLog.committed);
+                    liveApplied.lazySet(r.raftLog.applied);
+                    liveLastIndex.lazySet(r.raftLog.lastIndex());
                     liveState = r.state;
                     // Refresh structured logging context so logs emitted while
                     // handling the next event carry the current id/term/role/
@@ -253,19 +262,21 @@ public class DefaultNode implements Node {
             rn.tick();
         } else if (ev instanceof ProposeEvent pe) {
             Eraftpb.Message m = pe.msg.toBuilder().setFrom(r.id).build();
-            RaftException err;
             try {
-                err = r.step(m);
+                r.step(m);
+                if (pe.result != null) pe.result.complete(null);
+            } catch (RaftException re) {
+                // Raft-layer rejection (ErrProposalDropped, ...) — propagate
+                // back to the caller via the future without terminating the
+                // event loop.
+                if (pe.result != null) pe.result.completeExceptionally(re);
             } catch (RuntimeException e) {
-                // Never leak an exception to the caller via an uncompleted
-                // future. Surface it as ErrProposalDropped + log; the run()
-                // loop's outer catch will still terminate the loop.
+                // Invariant violation or programmer error. Complete the
+                // future so the caller doesn't block forever, then rethrow
+                // so the outer catch in run() shuts the loop down.
                 r.logger.error("propose dispatch raised: {}", e);
-                if (pe.result != null) pe.result.complete(RaftException.ErrProposalDropped);
+                if (pe.result != null) pe.result.completeExceptionally(e);
                 throw e;
-            }
-            if (pe.result != null) {
-                pe.result.complete(err);
             }
         } else if (ev instanceof RecvEvent re) {
             Eraftpb.Message msg = re.msg;
@@ -273,7 +284,15 @@ public class DefaultNode implements Node {
                     && r.trk.getProgress().get(msg.getFrom()) == null) {
                 // Drop response from unknown peer
             } else {
-                r.step(msg);
+                try {
+                    r.step(msg);
+                } catch (RaftException re2) {
+                    // No caller is waiting on recv; the common case is a
+                    // forwarded MsgPropose hitting ErrProposalDropped at a
+                    // follower-that-isn't-leader. Log at debug.
+                    r.logger.debug("dropped {} from {:x}: {}",
+                            msg.getMsgType(), msg.getFrom(), re2.getMessage());
+                }
             }
         } else if (ev instanceof ConfChangeEvent cce) {
             boolean okBefore = r.trk.getProgress().get(r.id) != null;
@@ -327,6 +346,19 @@ public class DefaultNode implements Node {
     }
 
     /**
+     * Variant of {@link #submitWithResult} for futures that signal failure
+     * via exceptional completion instead of a sentinel return value. Used
+     * by propose() where ErrStopped now propagates as a thrown
+     * {@link RaftException}.
+     */
+    private void submitWithStoppedExceptional(Event ev, CompletableFuture<?> result) throws InterruptedException {
+        events.put(ev);
+        if (done && !result.isDone()) {
+            result.completeExceptionally(RaftException.ErrStopped);
+        }
+    }
+
+    /**
      * Cancel any pending callers blocked on results from the event loop.
      * Without this, stop() would leave them blocked indefinitely.
      *
@@ -338,10 +370,10 @@ public class DefaultNode implements Node {
         while ((ev = events.poll()) != null) {
             if (ev instanceof ProposeEvent pe) {
                 if (pe.result != null) {
-                    pe.result.complete(RaftException.ErrStopped);
+                    pe.result.completeExceptionally(RaftException.ErrStopped);
                 }
             } else if (ev instanceof StatusEvent se) {
-                se.result.complete(new Status());
+                se.result.complete(null);
             } else if (ev instanceof ConfChangeEvent cce) {
                 cce.reply.complete(Eraftpb.ConfState.getDefaultInstance());
             }
@@ -369,67 +401,73 @@ public class DefaultNode implements Node {
     }
 
     @Override
-    public RaftException campaign() throws InterruptedException {
+    public void campaign() throws InterruptedException, RaftException {
         // Fire-and-forget: MsgHup is a local message, bypass the network-source filter
         // in step() by enqueuing directly. Matches etcd-raft's Campaign() semantics.
-        if (done) return RaftException.ErrStopped;
+        if (done) throw RaftException.ErrStopped;
         events.put(new RecvEvent(Eraftpb.Message.newBuilder()
                 .setMsgType(Eraftpb.MessageType.MsgHup)
                 .build()));
-        return null;
     }
 
     @Override
-    public RaftException propose(byte[] data) throws InterruptedException {
+    public void propose(byte[] data) throws InterruptedException, RaftException {
         if (done) {
             rn.raft.metrics.onProposal(RaftMetrics.ProposalResult.STOPPED);
-            return RaftException.ErrStopped;
+            throw RaftException.ErrStopped;
         }
         if (proposalsDisabled) {
             rn.raft.metrics.onProposal(RaftMetrics.ProposalResult.DROPPED);
-            return RaftException.ErrProposalDropped;
+            throw RaftException.ErrProposalDropped;
         }
         Eraftpb.Message msg = Eraftpb.Message.newBuilder()
                 .setMsgType(Eraftpb.MessageType.MsgPropose)
                 .addEntries(Eraftpb.Entry.newBuilder()
                         .setData(data != null ? ByteString.copyFrom(data) : ByteString.EMPTY))
                 .build();
-        CompletableFuture<RaftException> result = new CompletableFuture<>();
-        submitWithResult(new ProposeEvent(msg, result), result, RaftException.ErrStopped);
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        submitWithStoppedExceptional(new ProposeEvent(msg, result), result);
         try {
-            return result.get();
+            result.get();
         } catch (InterruptedException e) {
             // Preserve the caller's interrupt status so loops/cancellation
             // upstream can react. Method already declares throws InterruptedException.
             Thread.currentThread().interrupt();
             throw e;
         } catch (ExecutionException e) {
-            return RaftException.ErrStopped;
+            // Unwrap the cause: dispatch() completes exceptionally with the
+            // RaftException it caught from r.step(), or with a RuntimeException
+            // that took the loop down. Preserve the cause so callers don't
+            // lose stack context.
+            Throwable cause = e.getCause();
+            if (cause instanceof RaftException re) throw re;
+            if (cause instanceof RuntimeException rte) throw rte;
+            throw new RaftException(RaftException.Code.STOPPED,
+                    "propose failed: " + (cause != null ? cause.getMessage() : "unknown"), cause);
         }
     }
 
     @Override
-    public RaftException proposeConfChange(Eraftpb.ConfChangeV2 cc) throws InterruptedException {
+    public void proposeConfChange(Eraftpb.ConfChangeV2 cc) throws InterruptedException, RaftException {
         Eraftpb.Message m = io.github.xinfra.lab.raft.internal.confchange.Changer.toMessage(cc);
-        return step(m);
+        step(m);
     }
 
     @Override
-    public RaftException step(Eraftpb.Message msg) throws InterruptedException {
-        if (done) return RaftException.ErrStopped;
+    public void step(Eraftpb.Message msg) throws InterruptedException, RaftException {
+        if (done) throw RaftException.ErrStopped;
         // Ignore unexpected local messages received over network.
         if (Util.isLocalMsg(msg.getMsgType()) && !Util.isLocalMsgTarget(msg.getFrom())) {
-            return null;
+            return;
         }
         // Forwarded MsgPropose goes through the ProposeEvent path (no result future
         // since step() is fire-and-forget); others as RecvEvent.
         if (msg.getMsgType() == Eraftpb.MessageType.MsgPropose) {
-            if (proposalsDisabled) return RaftException.ErrProposalDropped;
+            if (proposalsDisabled) throw RaftException.ErrProposalDropped;
             events.put(new ProposeEvent(msg, null));
         } else {
             events.put(new RecvEvent(msg));
         }
-        return null;
     }
 
     @Override
@@ -451,6 +489,10 @@ public class DefaultNode implements Node {
         try {
             return reply.get();
         } catch (ExecutionException e) {
+            // Preserve the cause so the failure is debuggable. Returning
+            // default-instance keeps the API forgiving (callers' apply path
+            // doesn't crash), but the cause is no longer silently swallowed.
+            rn.raft.logger.error("applyConfChange failed: {}", e.getCause() != null ? e.getCause() : e);
             return Eraftpb.ConfState.getDefaultInstance();
         }
     }
@@ -466,23 +508,21 @@ public class DefaultNode implements Node {
     }
 
     @Override
-    public RaftException forgetLeader() throws InterruptedException {
-        if (done) return RaftException.ErrStopped;
+    public void forgetLeader() throws InterruptedException, RaftException {
+        if (done) throw RaftException.ErrStopped;
         events.put(new RecvEvent(Eraftpb.Message.newBuilder()
                 .setMsgType(Eraftpb.MessageType.MsgForgetLeader)
                 .build()));
-        return null;
     }
 
     @Override
-    public RaftException readIndex(byte[] rctx) throws InterruptedException {
-        if (done) return RaftException.ErrStopped;
+    public void readIndex(byte[] rctx) throws InterruptedException, RaftException {
+        if (done) throw RaftException.ErrStopped;
         events.put(new RecvEvent(Eraftpb.Message.newBuilder()
                 .setMsgType(Eraftpb.MessageType.MsgReadIndex)
                 .addEntries(Eraftpb.Entry.newBuilder()
                         .setData(rctx != null ? ByteString.copyFrom(rctx) : ByteString.EMPTY))
                 .build()));
-        return null;
     }
 
     @Override
@@ -493,6 +533,7 @@ public class DefaultNode implements Node {
         try {
             return future.get();
         } catch (ExecutionException e) {
+            rn.raft.logger.error("status() failed: {}", e.getCause() != null ? e.getCause() : e);
             return new Status();
         }
     }
@@ -577,8 +618,8 @@ public class DefaultNode implements Node {
                 liveTerm.get(),
                 liveLead.get(),
                 liveCommit.get(),
-                rn.raft.raftLog.applied,
-                rn.raft.raftLog.lastIndex(),
+                liveApplied.get(),
+                liveLastIndex.get(),
                 liveState);
     }
 
@@ -620,8 +661,9 @@ public class DefaultNode implements Node {
 
     static final class ProposeEvent implements Event {
         final Eraftpb.Message msg;
-        final CompletableFuture<RaftException> result; // null when caller doesn't wait
-        ProposeEvent(Eraftpb.Message msg, CompletableFuture<RaftException> result) {
+        /** null when caller doesn't wait; otherwise completed (or completed-exceptionally) by dispatch. */
+        final CompletableFuture<Void> result;
+        ProposeEvent(Eraftpb.Message msg, CompletableFuture<Void> result) {
             this.msg = msg;
             this.result = result;
         }

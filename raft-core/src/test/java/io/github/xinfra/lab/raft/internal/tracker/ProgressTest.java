@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.*;
 class ProgressTest {
 
     @Test
-    void testProgressString() {
+    void testProgressString() throws RaftException {
         Inflights ins = new Inflights(1, 0);
         ins.add(123, 1);
         Progress pr = new Progress(1, 2, ins, true);
@@ -40,7 +40,7 @@ class ProgressTest {
     }
 
     @Test
-    void testProgressIsPaused() {
+    void testProgressIsPaused() throws RaftException {
         Object[][] tests = {
                 {StateType.StateProbe, false, false},
                 {StateType.StateProbe, true, true},
@@ -59,7 +59,7 @@ class ProgressTest {
     }
 
     @Test
-    void testProgressResume() {
+    void testProgressResume() throws RaftException {
         Progress p = new Progress();
         p.setNext(2);
         p.setInflights(new Inflights(256, 0));
@@ -74,7 +74,7 @@ class ProgressTest {
     }
 
     @Test
-    void testProgressBecomeProbe() {
+    void testProgressBecomeProbe() throws RaftException {
         // from StateReplicate
         Progress p1 = new Progress(1, 5, new Inflights(256, 0), false);
         p1.setState(StateType.StateReplicate);
@@ -103,7 +103,7 @@ class ProgressTest {
     }
 
     @Test
-    void testProgressBecomeReplicate() {
+    void testProgressBecomeReplicate() throws RaftException {
         Progress p = new Progress(1, 5, new Inflights(256, 0), false);
         p.setState(StateType.StateProbe);
         p.becomeReplicate();
@@ -113,7 +113,7 @@ class ProgressTest {
     }
 
     @Test
-    void testProgressBecomeSnapshot() {
+    void testProgressBecomeSnapshot() throws RaftException {
         Progress p = new Progress(1, 5, new Inflights(256, 0), false);
         p.setState(StateType.StateProbe);
         p.becomeSnapshot(10);
@@ -123,7 +123,7 @@ class ProgressTest {
     }
 
     @Test
-    void testProgressUpdate() {
+    void testProgressUpdate() throws RaftException {
         long prevM = 3, prevN = 5;
 
         Object[][] tests = {
@@ -147,7 +147,7 @@ class ProgressTest {
     }
 
     @Test
-    void testProgressMaybeDecr() {
+    void testProgressMaybeDecr() throws RaftException {
         Object[][] tests = {
                 // state, match, next, rejected, last, result, wNext
                 {StateType.StateReplicate, 5L, 10L, 5L, 5L, false, 10L},

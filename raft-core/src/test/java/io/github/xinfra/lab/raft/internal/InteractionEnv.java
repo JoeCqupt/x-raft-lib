@@ -92,7 +92,7 @@ public class InteractionEnv {
     }
 
     /** Dispatches a directive to its handler. */
-    public String handle(Datadriven.Directive d) {
+    public String handle(Datadriven.Directive d) throws RaftException {
         switch (d.command) {
             case "log-level":            return "ok";
             case "add-nodes":            return cmdAddNodes(d);
@@ -173,7 +173,7 @@ public class InteractionEnv {
         return "ok";
     }
 
-    private String cmdCampaign(Datadriven.Directive d) {
+    private String cmdCampaign(Datadriven.Directive d) throws RaftException {
         long id = Long.parseLong(d.getKv("id", d.args.isEmpty() ? null : d.args.get(0)));
         NodeContext ctx = requireNode(id);
         ctx.rn.campaign();
@@ -182,7 +182,7 @@ public class InteractionEnv {
                 id, id, ctx.rn.raft.state, ctx.rn.raft.term);
     }
 
-    private String cmdPropose(Datadriven.Directive d) {
+    private String cmdPropose(Datadriven.Directive d) throws RaftException {
         long id = Long.parseLong(d.getKv("id", null));
         String data = d.getKv("data", "");
         NodeContext ctx = requireNode(id);
@@ -221,7 +221,7 @@ public class InteractionEnv {
         return out.toString();
     }
 
-    private String cmdProcessReady(Datadriven.Directive d) {
+    private String cmdProcessReady(Datadriven.Directive d) throws RaftException {
         long id = Long.parseLong(d.getKv("id", null));
         NodeContext ctx = requireNode(id);
         StringBuilder out = new StringBuilder();
@@ -233,7 +233,7 @@ public class InteractionEnv {
         return out.toString();
     }
 
-    private String cmdStabilize(Datadriven.Directive d) {
+    private String cmdStabilize(Datadriven.Directive d) throws RaftException {
         StringBuilder out = new StringBuilder();
         // Iterate Ready/dispatch until no node has any pending work, capped to
         // avoid runaway loops in misconfigured tests.
@@ -261,7 +261,7 @@ public class InteractionEnv {
                 ctx.rn.raft.raftLog.lastIndex());
     }
 
-    private String cmdProposeConfChange(Datadriven.Directive d) {
+    private String cmdProposeConfChange(Datadriven.Directive d) throws RaftException {
         long id = Long.parseLong(d.getKv("id", null));
         String spec = d.getKv("changes", "");
         Eraftpb.ConfChangeV2 cc = parseConfChangeSpec(spec);
@@ -290,7 +290,7 @@ public class InteractionEnv {
         return "ok";
     }
 
-    private String cmdForgetLeader(Datadriven.Directive d) {
+    private String cmdForgetLeader(Datadriven.Directive d) throws RaftException {
         long id = Long.parseLong(d.getKv("id", null));
         NodeContext ctx = requireNode(id);
         ctx.rn.forgetLeader();
@@ -422,7 +422,11 @@ public class InteractionEnv {
             } else {
                 out.append(String.format("> %d receiving %s from %d%n",
                         ctx.id, m.getMsgType(), m.getFrom()));
-                ctx.rn.step(m);
+                try {
+                    ctx.rn.step(m);
+                } catch (RaftException re) {
+                    out.append(String.format("> %d rejected: %s%n", ctx.id, re.getMessage()));
+                }
             }
             it.remove();
             processed = true;
@@ -431,7 +435,7 @@ public class InteractionEnv {
     }
 
     /** Process exactly one Ready on {@code ctx}, route its messages. */
-    private void handleReady(NodeContext ctx, StringBuilder out) {
+    private void handleReady(NodeContext ctx, StringBuilder out) throws RaftException {
         Ready rd = ctx.rn.ready();
         out.append(String.format("> %d handling Ready: state=%s term=%d commit=%d%n",
                 ctx.id, ctx.rn.raft.state, ctx.rn.raft.term,

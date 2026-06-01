@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RaftInvariantExceptionTest {
 
     @Test
-    void legacyConstructorsDefaultToBug() {
+    void legacyConstructorsDefaultToBug() throws RaftException {
         RaftInvariantException e1 = new RaftInvariantException("boom");
         RaftInvariantException e2 = new RaftInvariantException("boom", new RuntimeException());
         assertThat(e1.category()).isEqualTo(RaftInvariantException.Category.BUG);
@@ -21,7 +21,7 @@ class RaftInvariantExceptionTest {
     }
 
     @Test
-    void categoryConstructorsCarryCategory() {
+    void categoryConstructorsCarryCategory() throws RaftException {
         RaftInvariantException io = new RaftInvariantException(
                 RaftInvariantException.Category.STORAGE_IO, "disk gone");
         RaftInvariantException corrupt = new RaftInvariantException(
@@ -31,13 +31,13 @@ class RaftInvariantExceptionTest {
     }
 
     @Test
-    void nullCategoryFallsBackToBug() {
+    void nullCategoryFallsBackToBug() throws RaftException {
         RaftInvariantException e = new RaftInvariantException(null, "x");
         assertThat(e.category()).isEqualTo(RaftInvariantException.Category.BUG);
     }
 
     @Test
-    void messageIsPrefixedWithCategoryForTriage() {
+    void messageIsPrefixedWithCategoryForTriage() throws RaftException {
         RaftInvariantException e = new RaftInvariantException(
                 RaftInvariantException.Category.STORAGE_IO, "fsync failed");
         assertThat(e.getMessage()).isEqualTo("[STORAGE_IO] fsync failed");

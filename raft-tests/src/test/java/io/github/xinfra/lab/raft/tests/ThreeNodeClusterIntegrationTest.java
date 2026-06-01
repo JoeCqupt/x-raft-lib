@@ -6,7 +6,6 @@
  */
 package io.github.xinfra.lab.raft.tests;
 
-import io.github.xinfra.lab.raft.RaftException;
 import io.github.xinfra.lab.raft.examples.RaftPeer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -78,8 +77,7 @@ class ThreeNodeClusterIntegrationTest {
             assertThat(leader).isNotNull();
             int batch = 20;
             for (int i = 0; i < batch; i++) {
-                RaftException err = leader.propose(("cmd-" + i).getBytes());
-                assertThat(err).as("propose %d on leader must accept", i).isNull();
+                leader.propose(("cmd-" + i).getBytes()); // accepted unless RaftException thrown
             }
 
             // 4. All three apply logs converge on the same sequence.

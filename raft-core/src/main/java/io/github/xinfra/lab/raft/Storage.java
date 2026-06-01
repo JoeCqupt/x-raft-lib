@@ -121,7 +121,7 @@ import java.util.List;
  * loop after a swallowed failure is the classic source of silent data loss
  * and un-debuggable divergence.
  */
-public interface Storage {
+public interface Storage extends AutoCloseable {
 
     /**
      * Returns the saved HardState and ConfState. Called once at startup.
@@ -203,7 +203,10 @@ public interface Storage {
 
     /**
      * Optional cleanup hook called by the host on shutdown. Default no-op.
+     * Declared to not throw so Storage can be used with try-with-resources
+     * without forcing every caller to handle a checked Exception.
      */
+    @Override
     default void close() {}
 
     // ====================== Streaming snapshots (optional) ======================

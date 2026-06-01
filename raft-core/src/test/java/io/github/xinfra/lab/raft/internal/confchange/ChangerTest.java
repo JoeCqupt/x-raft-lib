@@ -32,13 +32,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ChangerTest {
 
     @Test
-    void testRestore_empty() {
+    void testRestore_empty() throws RaftException {
         Eraftpb.ConfState cs = Eraftpb.ConfState.getDefaultInstance();
         assertRestore(cs);
     }
 
     @Test
-    void testRestore_voters() {
+    void testRestore_voters() throws RaftException {
         Eraftpb.ConfState cs = Eraftpb.ConfState.newBuilder()
                 .addVoters(1).addVoters(2).addVoters(3)
                 .build();
@@ -46,7 +46,7 @@ class ChangerTest {
     }
 
     @Test
-    void testRestore_votersAndLearners() {
+    void testRestore_votersAndLearners() throws RaftException {
         Eraftpb.ConfState cs = Eraftpb.ConfState.newBuilder()
                 .addVoters(1).addVoters(2).addVoters(3)
                 .addLearners(4).addLearners(5).addLearners(6)
@@ -55,7 +55,7 @@ class ChangerTest {
     }
 
     @Test
-    void testRestore_jointConfig() {
+    void testRestore_jointConfig() throws RaftException {
         Eraftpb.ConfState cs = Eraftpb.ConfState.newBuilder()
                 .addVoters(1).addVoters(2).addVoters(3)
                 .addLearners(5)
@@ -66,7 +66,7 @@ class ChangerTest {
     }
 
     @Test
-    void testSimpleChange_addVoter() {
+    void testSimpleChange_addVoter() throws RaftException {
         ProgressTracker tracker = new ProgressTracker(20, 0);
         tracker.getConfig().getVoters().incoming().add(1);
         tracker.getProgress().put(1L, new Progress(0, 1, new Inflights(20, 0), false));
@@ -84,7 +84,7 @@ class ChangerTest {
     }
 
     @Test
-    void testSimpleChange_removeVoter() {
+    void testSimpleChange_removeVoter() throws RaftException {
         ProgressTracker tracker = new ProgressTracker(20, 0);
         tracker.getConfig().getVoters().incoming().add(1);
         tracker.getConfig().getVoters().incoming().add(2);
@@ -105,7 +105,7 @@ class ChangerTest {
     }
 
     @Test
-    void testSimpleChange_addLearner() {
+    void testSimpleChange_addLearner() throws RaftException {
         ProgressTracker tracker = new ProgressTracker(20, 0);
         tracker.getConfig().getVoters().incoming().add(1);
         tracker.getProgress().put(1L, new Progress(0, 1, new Inflights(20, 0), false));
@@ -123,7 +123,7 @@ class ChangerTest {
         assertThat(result.progress().get(2L).isLearner()).isTrue();
     }
 
-    private void assertRestore(Eraftpb.ConfState cs) {
+    private void assertRestore(Eraftpb.ConfState cs) throws RaftException {
         ProgressTracker tracker = new ProgressTracker(20, 0);
         Changer chg = new Changer(tracker, 10);
         Changer.Result result = Changer.restore(chg, cs);

@@ -166,7 +166,7 @@ public final class Util {
     }
 
     public static String describeSoftState(SoftState ss) {
-        return String.format("Lead:%d State:%s", ss.lead, ss.raftState);
+        return String.format("Lead:%d State:%s", ss.lead(), ss.raftState());
     }
 
     public static String describeConfState(Eraftpb.ConfState state) {

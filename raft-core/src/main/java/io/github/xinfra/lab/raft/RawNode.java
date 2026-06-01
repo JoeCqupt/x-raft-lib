@@ -19,6 +19,8 @@ import io.github.xinfra.lab.raft.internal.*;
 import com.google.protobuf.ByteString;
 import io.github.xinfra.lab.raft.proto.Eraftpb;
 import io.github.xinfra.lab.raft.internal.tracker.Progress;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -27,6 +29,8 @@ import java.util.List;
  * RawNode is a thread-unsafe Node.
  */
 public class RawNode {
+    private static final Logger LOG = LoggerFactory.getLogger(RawNode.class);
+
     public Raft raft;
     public boolean asyncStorageWrites;
 
@@ -64,35 +68,35 @@ public class RawNode {
      * helpers funnel through this to avoid duplicating the
      * Message.newBuilder()/setMsgType()/build()/raft.step() boilerplate.
      */
-    private RaftException stepLocal(Eraftpb.MessageType type, java.util.function.Consumer<Eraftpb.Message.Builder> mutator) {
+    private void stepLocal(Eraftpb.MessageType type, java.util.function.Consumer<Eraftpb.Message.Builder> mutator) throws RaftException {
         Eraftpb.Message.Builder mb = Eraftpb.Message.newBuilder().setMsgType(type);
         if (mutator != null) mutator.accept(mb);
-        return raft.step(mb.build());
+        raft.step(mb.build());
     }
 
     /** Campaign causes this RawNode to transition to candidate state. */
-    public RaftException campaign() {
-        return stepLocal(Eraftpb.MessageType.MsgHup, null);
+    public void campaign() throws RaftException {
+        stepLocal(Eraftpb.MessageType.MsgHup, null);
     }
 
     /** Propose proposes data be appended to the raft log. */
-    public RaftException propose(byte[] data) {
-        return stepLocal(Eraftpb.MessageType.MsgPropose, mb -> mb
+    public void propose(byte[] data) throws RaftException {
+        stepLocal(Eraftpb.MessageType.MsgPropose, mb -> mb
                 .setFrom(raft.id)
                 .addEntries(Eraftpb.Entry.newBuilder()
                         .setData(data != null ? ByteString.copyFrom(data) : ByteString.EMPTY)));
     }
 
     /** ProposeConfChange proposes a config change. */
-    public RaftException proposeConfChange(Eraftpb.ConfChangeV2 cc) {
+    public void proposeConfChange(Eraftpb.ConfChangeV2 cc) throws RaftException {
         Eraftpb.Message m = io.github.xinfra.lab.raft.internal.confchange.Changer.toMessage(cc);
-        return raft.step(m);
+        raft.step(m);
     }
 
     /** ProposeConfChange proposes a V1 config change. */
-    public RaftException proposeConfChange(Eraftpb.ConfChange cc) {
+    public void proposeConfChange(Eraftpb.ConfChange cc) throws RaftException {
         // V1 conf changes are marshalled as EntryConfChange (matching Go behavior)
-        return stepLocal(Eraftpb.MessageType.MsgPropose, mb -> mb
+        stepLocal(Eraftpb.MessageType.MsgPropose, mb -> mb
                 .addEntries(Eraftpb.Entry.newBuilder()
                         .setEntryType(Eraftpb.EntryType.EntryConfChange)
                         .setData(cc.toByteString())));
@@ -104,15 +108,15 @@ public class RawNode {
     }
 
     /** Step advances the state machine using the given message. */
-    public RaftException step(Eraftpb.Message m) {
+    public void step(Eraftpb.Message m) throws RaftException {
         if (Util.isLocalMsg(m.getMsgType()) && !Util.isLocalMsgTarget(m.getFrom())) {
-            return RaftException.ErrStepLocalMsg;
+            throw RaftException.ErrStepLocalMsg;
         }
         if (Util.isResponseMsg(m.getMsgType()) && !Util.isLocalMsgTarget(m.getFrom()) &&
             raft.trk.getProgress().get(m.getFrom()) == null) {
-            return RaftException.ErrStepPeerNotFound;
+            throw RaftException.ErrStepPeerNotFound;
         }
-        return raft.step(m);
+        raft.step(m);
     }
 
     /** Ready returns the outstanding work that the application needs to handle. */
@@ -250,7 +254,16 @@ public class RawNode {
             throw new RaftInvariantException("Advance must not be called when using AsyncStorageWrites");
         }
         for (int i = 0; i < stepsOnAdvance.size(); i++) {
-            raft.step(stepsOnAdvance.get(i));
+            // stepsOnAdvance carries self-delivered append-resp / apply-resp
+            // messages produced by acceptReady — never MsgPropose — so step
+            // never raises ErrProposalDropped. Defensive catch keeps advance()
+            // void; if a future change changes that, log unmistakably.
+            try {
+                raft.step(stepsOnAdvance.get(i));
+            } catch (RaftException e) {
+                LOG.error("node {} unexpected RaftException replaying {} in advance(): {}",
+                        raft.id, stepsOnAdvance.get(i).getMsgType(), e);
+            }
             stepsOnAdvance.set(i, Eraftpb.Message.getDefaultInstance());
         }
         stepsOnAdvance.clear();
@@ -291,30 +304,47 @@ public class RawNode {
 
     /** ReportUnreachable reports the given node is not reachable for the last send. */
     public void reportUnreachable(long id) {
-        stepLocal(Eraftpb.MessageType.MsgUnreachable, mb -> mb.setFrom(id));
+        // MsgUnreachable is a local notification — never raises.
+        try {
+            stepLocal(Eraftpb.MessageType.MsgUnreachable, mb -> mb.setFrom(id));
+        } catch (RaftException e) {
+            LOG.error("node {} unexpected RaftException from MsgUnreachable: {}", raft.id, e);
+        }
     }
 
     /** ReportSnapshot reports the status of the sent snapshot. */
     public void reportSnapshot(long id, SnapshotStatus status) {
         boolean rej = status == SnapshotStatus.SnapshotFailure;
-        stepLocal(Eraftpb.MessageType.MsgSnapStatus, mb -> mb.setFrom(id).setReject(rej));
+        try {
+            stepLocal(Eraftpb.MessageType.MsgSnapStatus, mb -> mb.setFrom(id).setReject(rej));
+        } catch (RaftException e) {
+            LOG.error("node {} unexpected RaftException from MsgSnapStatus: {}", raft.id, e);
+        }
     }
 
     /** TransferLeader tries to transfer leadership to the given transferee. */
     public void transferLeader(long transferee) {
-        stepLocal(Eraftpb.MessageType.MsgTransferLeader, mb -> mb.setFrom(transferee));
+        try {
+            stepLocal(Eraftpb.MessageType.MsgTransferLeader, mb -> mb.setFrom(transferee));
+        } catch (RaftException e) {
+            LOG.error("node {} unexpected RaftException from MsgTransferLeader: {}", raft.id, e);
+        }
     }
 
     /** ForgetLeader forgets a follower's current leader. */
-    public RaftException forgetLeader() {
-        return stepLocal(Eraftpb.MessageType.MsgForgetLeader, null);
+    public void forgetLeader() throws RaftException {
+        stepLocal(Eraftpb.MessageType.MsgForgetLeader, null);
     }
 
     /** ReadIndex requests a read state. */
     public void readIndex(byte[] rctx) {
-        stepLocal(Eraftpb.MessageType.MsgReadIndex, mb -> mb
-                .addEntries(Eraftpb.Entry.newBuilder()
-                        .setData(rctx != null ? ByteString.copyFrom(rctx) : ByteString.EMPTY)));
+        try {
+            stepLocal(Eraftpb.MessageType.MsgReadIndex, mb -> mb
+                    .addEntries(Eraftpb.Entry.newBuilder()
+                            .setData(rctx != null ? ByteString.copyFrom(rctx) : ByteString.EMPTY)));
+        } catch (RaftException e) {
+            LOG.error("node {} unexpected RaftException from MsgReadIndex: {}", raft.id, e);
+        }
     }
 
     /** Bootstrap initializes the RawNode for first use. */

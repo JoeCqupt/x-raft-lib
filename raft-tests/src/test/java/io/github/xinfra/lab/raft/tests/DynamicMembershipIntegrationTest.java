@@ -63,8 +63,7 @@ class DynamicMembershipIntegrationTest {
                             .setType(Eraftpb.ConfChangeType.ConfChangeRemoveNode)
                             .setNodeId(removed))
                     .build();
-            assertThat(leader.proposeConfChange(cc))
-                    .as("conf-change proposal on leader must be accepted").isNull();
+            leader.proposeConfChange(cc); // accepted unless RaftException thrown
 
             // The two surviving nodes must persist a 2-voter membership without
             // the removed id.
@@ -139,7 +138,7 @@ class DynamicMembershipIntegrationTest {
                             .setType(Eraftpb.ConfChangeType.ConfChangeAddLearnerNode)
                             .setNodeId(4L))
                     .build();
-            assertThat(leader.proposeConfChange(addLearner)).isNull();
+            leader.proposeConfChange(addLearner);
 
             // The learner appears in the leader's persisted ConfState and the
             // joiner catches up on the committed log.
@@ -155,7 +154,7 @@ class DynamicMembershipIntegrationTest {
                             .setType(Eraftpb.ConfChangeType.ConfChangeAddNode)
                             .setNodeId(4L))
                     .build();
-            assertThat(leader.proposeConfChange(promote)).isNull();
+            leader.proposeConfChange(promote);
 
             assertThat(awaitTrue(() -> votersOf(leader).contains(4L)
                             && votersOf(leader).size() == 4, 15_000))

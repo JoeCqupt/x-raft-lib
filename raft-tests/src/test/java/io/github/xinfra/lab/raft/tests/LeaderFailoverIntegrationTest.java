@@ -99,7 +99,7 @@ class LeaderFailoverIntegrationTest {
             // The new leader can accept proposals and the surviving
             // follower applies them.
             for (int i = 0; i < 5; i++) {
-                assertThat(newLeader.propose(("post-" + i).getBytes())).isNull();
+                newLeader.propose(("post-" + i).getBytes());
             }
             assertThat(awaitTrue(
                     () -> nodes.stream().allMatch(p -> applyLogs.get(p.id).size() >= 10),

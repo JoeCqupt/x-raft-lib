@@ -61,7 +61,16 @@ class InteractionTest {
         return files.stream().map(p -> DynamicTest.dynamicTest(p.getFileName().toString(),
                 () -> {
                     InteractionEnv env = new InteractionEnv();
-                    Datadriven.run(p, env::handle);
+                    Datadriven.run(p, d -> {
+                        try {
+                            return env.handle(d);
+                        } catch (io.github.xinfra.lab.raft.RaftException re) {
+                            // Datadriven's handler is a Function (unchecked);
+                            // wrap raft-layer rejections so the directive can
+                            // still report the error in the .txt assertion.
+                            throw new RuntimeException(re);
+                        }
+                    });
                 }));
     }
 }

@@ -38,7 +38,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class RaftTest {
 
     @Test
-    void testProgressLeader() {
+    void testProgressLeader() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1, 2));
         Raft r = newTestRaft(1, 5, 1, s);
         r.becomeCandidate();
@@ -52,7 +52,7 @@ class RaftTest {
                 .addEntries(Eraftpb.Entry.newBuilder().setData(ByteString.copyFromUtf8("foo")))
                 .build();
         for (int i = 0; i < 5; i++) {
-            assertThat(r.step(propMsg)).isNull();
+            r.step(propMsg);
         }
 
         assertThat(r.trk.getProgress().get(1L).getMatch()).isZero();
@@ -69,7 +69,7 @@ class RaftTest {
     }
 
     @Test
-    void testProgressResumeByHeartbeatResp() {
+    void testProgressResumeByHeartbeatResp() throws RaftException {
         Raft r = newTestRaft(1, 5, 1, newTestMemoryStorage(withPeers(1, 2)));
         r.becomeCandidate();
         r.becomeLeader();
@@ -93,7 +93,7 @@ class RaftTest {
     }
 
     @Test
-    void testProgressPaused() {
+    void testProgressPaused() throws RaftException {
         Raft r = newTestRaft(1, 5, 1, newTestMemoryStorage(withPeers(1, 2)));
         r.becomeCandidate();
         r.becomeLeader();
@@ -115,7 +115,7 @@ class RaftTest {
     }
 
     @Test
-    void testUncommittedEntryLimit() {
+    void testUncommittedEntryLimit() throws RaftException {
         final int maxEntries = 1024;
         Eraftpb.Entry testEntry = Eraftpb.Entry.newBuilder()
                 .setData(ByteString.copyFromUtf8("testdata")).build();
@@ -143,11 +143,11 @@ class RaftTest {
                 .addEntries(testEntry)
                 .build();
         for (int i = 0; i < maxEntries; i++) {
-            assertThat(r.step(propMsg)).isNull();
+            r.step(propMsg);
         }
 
         // Send one more proposal. It should be rejected.
-        assertThat(r.step(propMsg)).isEqualTo(RaftException.ErrProposalDropped);
+        assertThatThrownBy(() -> r.step(propMsg)).isEqualTo(RaftException.ErrProposalDropped);
 
         // Read messages and reduce the uncommitted size.
         List<Eraftpb.Message> ms = r.readMessages();
@@ -166,10 +166,10 @@ class RaftTest {
         for (int i = 0; i < 2 * maxEntries; i++) {
             largePropBuilder.addEntries(testEntry);
         }
-        assertThat(r.step(largePropBuilder.build())).isNull();
+        r.step(largePropBuilder.build());
 
         // Send one more proposal. It should be rejected, again.
-        assertThat(r.step(propMsg)).isEqualTo(RaftException.ErrProposalDropped);
+        assertThatThrownBy(() -> r.step(propMsg)).isEqualTo(RaftException.ErrProposalDropped);
 
         // But we can always append an entry with no Data.
         Eraftpb.Message emptyProp = Eraftpb.Message.newBuilder()
@@ -177,7 +177,7 @@ class RaftTest {
                 .setMsgType(Eraftpb.MessageType.MsgPropose)
                 .addEntries(Eraftpb.Entry.getDefaultInstance())
                 .build();
-        assertThat(r.step(emptyProp)).isNull();
+        r.step(emptyProp);
 
         // Read messages and reduce.
         ms = r.readMessages();
@@ -191,7 +191,7 @@ class RaftTest {
     }
 
     @Test
-    void testLearnerElectionTimeout() {
+    void testLearnerElectionTimeout() throws RaftException {
         Raft n1 = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1), withLearners(2)));
         Raft n2 = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1), withLearners(2)));
 
@@ -208,7 +208,7 @@ class RaftTest {
     }
 
     @Test
-    void testLearnerCanVote() {
+    void testLearnerCanVote() throws RaftException {
         Raft n2 = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1), withLearners(2)));
         n2.becomeFollower(1, Util.NONE);
 
@@ -271,7 +271,7 @@ class RaftTest {
     }
 
     @Test
-    void testRecvMsgBeat() {
+    void testRecvMsgBeat() throws RaftException {
         // leader: receive MsgBeat => bcast heartbeat
         Raft r = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         r.becomeCandidate();
@@ -291,7 +291,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderIncreaseNext() {
+    void testLeaderIncreaseNext() throws RaftException {
         List<Eraftpb.Entry> previousEnts = List.of(
                 Eraftpb.Entry.newBuilder().setIndex(1).setTerm(1).build(),
                 Eraftpb.Entry.newBuilder().setIndex(2).setTerm(1).build(),
@@ -313,16 +313,16 @@ class RaftTest {
     // ==================== Tests using Network ====================
 
     @Test
-    void testLeaderElection() {
+    void testLeaderElection() throws RaftException {
         testLeaderElectionImpl(false);
     }
 
     @Test
-    void testLeaderElectionPreVote() {
+    void testLeaderElectionPreVote() throws RaftException {
         testLeaderElectionImpl(true);
     }
 
-    private void testLeaderElectionImpl(boolean preVote) {
+    private void testLeaderElectionImpl(boolean preVote) throws RaftException {
         Consumer<Config> cfg = preVote ? c -> c.preVote = true : null;
         RaftStateType candState = preVote ? RaftStateType.StatePreCandidate : RaftStateType.StateCandidate;
         long candTerm = preVote ? 0 : 1;
@@ -347,16 +347,16 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderCycle() {
+    void testLeaderCycle() throws RaftException {
         testLeaderCycleImpl(false);
     }
 
     @Test
-    void testLeaderCyclePreVote() {
+    void testLeaderCyclePreVote() throws RaftException {
         testLeaderCycleImpl(true);
     }
 
-    private void testLeaderCycleImpl(boolean preVote) {
+    private void testLeaderCycleImpl(boolean preVote) throws RaftException {
         Consumer<Config> cfg = preVote ? c -> c.preVote = true : null;
         Network n = newNetworkWithConfig(cfg, null, null, null);
         for (long campaignerID = 1; campaignerID <= 3; campaignerID++) {
@@ -375,7 +375,7 @@ class RaftTest {
     }
 
     @Test
-    void testSingleNodeCandidate() {
+    void testSingleNodeCandidate() throws RaftException {
         Network tt = newNetwork((Network.StateMachine) null);
         tt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgHup).build());
@@ -383,7 +383,7 @@ class RaftTest {
     }
 
     @Test
-    void testSingleNodePreCandidate() {
+    void testSingleNodePreCandidate() throws RaftException {
         Network tt = newNetworkWithConfig(c -> c.preVote = true, (Network.StateMachine) null);
         tt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgHup).build());
@@ -391,7 +391,7 @@ class RaftTest {
     }
 
     @Test
-    void testSingleNodeCommit() {
+    void testSingleNodeCommit() throws RaftException {
         Network tt = newNetwork((Network.StateMachine) null);
         tt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgHup).build());
@@ -405,7 +405,7 @@ class RaftTest {
     }
 
     @Test
-    void testLogReplication() {
+    void testLogReplication() throws RaftException {
         record TC(Network nw, List<Eraftpb.Message> msgs, long wcommitted) {}
         List<TC> tests = List.of(
                 new TC(newNetwork(null, null, null),
@@ -443,7 +443,7 @@ class RaftTest {
     }
 
     @Test
-    void testDuelingCandidates() {
+    void testDuelingCandidates() throws RaftException {
         Raft a = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft b = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft c = newTestRaft(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -471,7 +471,7 @@ class RaftTest {
     }
 
     @Test
-    void testCandidateConcede() {
+    void testCandidateConcede() throws RaftException {
         Network tt = newNetwork(null, null, null);
         tt.isolate(1);
 
@@ -496,7 +496,7 @@ class RaftTest {
     }
 
     @Test
-    void testCannotCommitWithoutNewTermEntry() {
+    void testCannotCommitWithoutNewTermEntry() throws RaftException {
         Network tt = newNetwork(null, null, null, null, null);
         tt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1).setMsgType(Eraftpb.MessageType.MsgHup).build());
 
@@ -537,7 +537,7 @@ class RaftTest {
     }
 
     @Test
-    void testCommitWithoutNewTermEntry() {
+    void testCommitWithoutNewTermEntry() throws RaftException {
         Network tt = newNetwork(null, null, null, null, null);
         tt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1).setMsgType(Eraftpb.MessageType.MsgHup).build());
 
@@ -566,7 +566,7 @@ class RaftTest {
     }
 
     @Test
-    void testHandleMsgApp() {
+    void testHandleMsgApp() throws RaftException {
         record TC(Eraftpb.Message m, long wIndex, long wCommit, boolean wReject) {}
         List<TC> tests = List.of(
                 // Ensure 1: previous log mismatch
@@ -620,7 +620,7 @@ class RaftTest {
     }
 
     @Test
-    void testHandleHeartbeat() {
+    void testHandleHeartbeat() throws RaftException {
         long commit = 2;
         record TC(Eraftpb.Message m, long wCommit) {}
         List<TC> tests = List.of(
@@ -646,7 +646,7 @@ class RaftTest {
     }
 
     @Test
-    void testHandleHeartbeatResp() {
+    void testHandleHeartbeatResp() throws RaftException {
         MemoryStorage storage = newTestMemoryStorage(withPeers(1, 2));
         storage.append(index(1).terms(1, 2, 3));
         Raft sm = newTestRaft(1, 5, 1, storage);
@@ -678,7 +678,7 @@ class RaftTest {
     }
 
     @Test
-    void testStateTransition() {
+    void testStateTransition() throws RaftException {
         record TC(RaftStateType from, RaftStateType to, boolean wallow, long wterm, long wlead) {}
         List<TC> tests = List.of(
                 new TC(RaftStateType.StateFollower, RaftStateType.StateFollower, true, 1, Util.NONE),
@@ -726,7 +726,7 @@ class RaftTest {
     }
 
     @Test
-    void testAllServerStepdown() {
+    void testAllServerStepdown() throws RaftException {
         record TC(RaftStateType state, RaftStateType wstate, long wterm, long windex) {}
         List<TC> tests = List.of(
                 new TC(RaftStateType.StateFollower, RaftStateType.StateFollower, 3, 0),
@@ -764,19 +764,19 @@ class RaftTest {
     }
 
     @Test
-    void testStepIgnoreOldTermMsg() {
+    void testStepIgnoreOldTermMsg() throws RaftException {
         Raft sm = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1)));
         sm.term = 2;
         // Use a proxy to detect if stepFn is called
         boolean[] called = {false};
-        sm.stepFn = (r, m) -> { called[0] = true; return null; };
+        sm.stepFn = (r, m) -> { called[0] = true; };
         sm.step(Eraftpb.Message.newBuilder()
                 .setMsgType(Eraftpb.MessageType.MsgAppend).setTerm(sm.term - 1).build());
         assertThat(called[0]).isFalse();
     }
 
     @Test
-    void testProposal() {
+    void testProposal() throws RaftException {
         record TC(Network nw, boolean success) {}
         List<TC> tests = List.of(
                 new TC(newNetwork(null, null, null), true),
@@ -809,7 +809,7 @@ class RaftTest {
     }
 
     @Test
-    void testProposalByProxy() {
+    void testProposalByProxy() throws RaftException {
         Network tt = newNetwork(null, null, null);
         // promote 1 to leader
         tt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
@@ -830,7 +830,7 @@ class RaftTest {
     }
 
     @Test
-    void testSendAppendForProgressProbe() {
+    void testSendAppendForProgressProbe() throws RaftException {
         Raft r = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2)));
         r.becomeCandidate();
         r.becomeLeader();
@@ -881,7 +881,7 @@ class RaftTest {
     }
 
     @Test
-    void testSendAppendForProgressReplicate() {
+    void testSendAppendForProgressReplicate() throws RaftException {
         Raft r = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2)));
         r.becomeCandidate();
         r.becomeLeader();
@@ -898,7 +898,7 @@ class RaftTest {
     }
 
     @Test
-    void testSendAppendForProgressSnapshot() {
+    void testSendAppendForProgressSnapshot() throws RaftException {
         Raft r = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2)));
         r.becomeCandidate();
         r.becomeLeader();
@@ -913,7 +913,7 @@ class RaftTest {
     }
 
     @Test
-    void testRecvMsgUnreachable() {
+    void testRecvMsgUnreachable() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1, 2));
         s.append(index(1).terms(1, 2, 3));
         Raft r = newTestRaft(1, 10, 1, s);
@@ -970,7 +970,7 @@ class RaftTest {
     }
 
     @Test
-    void testPromotable() {
+    void testPromotable() throws RaftException {
         Raft r1 = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2)));
         assertThat(r1.promotable()).isTrue();
 
@@ -983,16 +983,16 @@ class RaftTest {
     }
 
     @Test
-    void testCampaignWhileLeader() {
+    void testCampaignWhileLeader() throws RaftException {
         testCampaignWhileLeaderImpl(false);
     }
 
     @Test
-    void testPreCampaignWhileLeader() {
+    void testPreCampaignWhileLeader() throws RaftException {
         testCampaignWhileLeaderImpl(true);
     }
 
-    private void testCampaignWhileLeaderImpl(boolean preVote) {
+    private void testCampaignWhileLeaderImpl(boolean preVote) throws RaftException {
         Config cfg = newTestConfig(1, 10, 1, newTestMemoryStorage(withPeers(1)));
         cfg.preVote = preVote;
         Raft r = Raft.newRaft(cfg);
@@ -1014,7 +1014,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderTransferToUpToDateNode() {
+    void testLeaderTransferToUpToDateNode() throws RaftException {
         Network nt = newNetwork(null, null, null);
         nt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgHup).build());
@@ -1034,7 +1034,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderTransferToSelf() {
+    void testLeaderTransferToSelf() throws RaftException {
         Network nt = newNetwork(null, null, null);
         nt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgHup).build());
@@ -1048,7 +1048,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderTransferToNonExistingNode() {
+    void testLeaderTransferToNonExistingNode() throws RaftException {
         Network nt = newNetwork(null, null, null);
         nt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgHup).build());
@@ -1061,14 +1061,14 @@ class RaftTest {
         assertThat(lead.leadTransferee).isEqualTo(Util.NONE);
     }
 
-    private void checkLeaderTransferState(Raft r, RaftStateType state, long lead) {
+    private void checkLeaderTransferState(Raft r, RaftStateType state, long lead) throws RaftException {
         assertThat(r.state).isEqualTo(state);
         assertThat(r.lead).isEqualTo(lead);
         assertThat(r.leadTransferee).isEqualTo(Util.NONE);
     }
 
     @Test
-    void testCommit() {
+    void testCommit() throws RaftException {
         record TC(long[] matches, List<Eraftpb.Entry> logs, long smTerm, long w) {}
         List<TC> tests = List.of(
                 // single
@@ -1115,16 +1115,16 @@ class RaftTest {
     }
 
     @Test
-    void testVoteFromAnyState() {
+    void testVoteFromAnyState() throws RaftException {
         testVoteFromAnyStateImpl(Eraftpb.MessageType.MsgRequestVote);
     }
 
     @Test
-    void testPreVoteFromAnyState() {
+    void testPreVoteFromAnyState() throws RaftException {
         testVoteFromAnyStateImpl(Eraftpb.MessageType.MsgRequestPreVote);
     }
 
-    private void testVoteFromAnyStateImpl(Eraftpb.MessageType vt) {
+    private void testVoteFromAnyStateImpl(Eraftpb.MessageType vt) throws RaftException {
         for (RaftStateType st : RaftStateType.values()) {
             Raft r = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
             r.term = 1;
@@ -1160,7 +1160,7 @@ class RaftTest {
     }
 
     @Test
-    void testOldMessages() {
+    void testOldMessages() throws RaftException {
         Network tt = newNetwork(null, null, null);
         // make node 1 leader at term 3
         tt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1).setMsgType(Eraftpb.MessageType.MsgHup).build());
@@ -1187,16 +1187,16 @@ class RaftTest {
     // ==================== Batch 1 ====================
 
     @Test
-    void testCandidateSelfVoteAfterLostElection() {
+    void testCandidateSelfVoteAfterLostElection() throws RaftException {
         testCandidateSelfVoteAfterLostElectionImpl(false);
     }
 
     @Test
-    void testCandidateSelfVoteAfterLostElectionPreVote() {
+    void testCandidateSelfVoteAfterLostElectionPreVote() throws RaftException {
         testCandidateSelfVoteAfterLostElectionImpl(true);
     }
 
-    private void testCandidateSelfVoteAfterLostElectionImpl(boolean preVote) {
+    private void testCandidateSelfVoteAfterLostElectionImpl(boolean preVote) throws RaftException {
         Raft sm = newTestRaft(1, 5, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         sm.preVote = preVote;
 
@@ -1215,7 +1215,7 @@ class RaftTest {
     }
 
     @Test
-    void testCandidateDeliversPreCandidateSelfVoteAfterBecomingCandidate() {
+    void testCandidateDeliversPreCandidateSelfVoteAfterBecomingCandidate() throws RaftException {
         Raft sm = newTestRaft(1, 5, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         sm.preVote = true;
 
@@ -1246,7 +1246,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderMsgAppSelfAckAfterTermChange() {
+    void testLeaderMsgAppSelfAckAfterTermChange() throws RaftException {
         Raft sm = newTestRaft(1, 5, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         sm.becomeCandidate();
         sm.becomeLeader();
@@ -1266,7 +1266,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderStepdownWhenQuorumActive() {
+    void testLeaderStepdownWhenQuorumActive() throws RaftException {
         Raft sm = newTestRaft(1, 5, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         sm.checkQuorum = true;
         sm.becomeCandidate();
@@ -1281,7 +1281,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderStepdownWhenQuorumLost() {
+    void testLeaderStepdownWhenQuorumLost() throws RaftException {
         Raft sm = newTestRaft(1, 5, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         sm.checkQuorum = true;
         sm.becomeCandidate();
@@ -1294,7 +1294,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderSupersedingWithCheckQuorum() {
+    void testLeaderSupersedingWithCheckQuorum() throws RaftException {
         Raft a = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft b = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft c = newTestRaft(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -1326,7 +1326,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderElectionWithCheckQuorum() {
+    void testLeaderElectionWithCheckQuorum() throws RaftException {
         Raft a = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft b = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft c = newTestRaft(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -1357,7 +1357,7 @@ class RaftTest {
     }
 
     @Test
-    void testFreeStuckCandidateWithCheckQuorum() {
+    void testFreeStuckCandidateWithCheckQuorum() throws RaftException {
         Raft a = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft b = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft c = newTestRaft(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -1400,7 +1400,7 @@ class RaftTest {
     }
 
     @Test
-    void testNonPromotableVoterWithCheckQuorum() {
+    void testNonPromotableVoterWithCheckQuorum() throws RaftException {
         Raft a = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2)));
         Raft b = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1)));
         a.checkQuorum = true;
@@ -1425,7 +1425,7 @@ class RaftTest {
     }
 
     @Test
-    void testDisruptiveFollower() {
+    void testDisruptiveFollower() throws RaftException {
         Raft n1 = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft n2 = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft n3 = newTestRaft(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -1456,7 +1456,7 @@ class RaftTest {
     }
 
     @Test
-    void testDisruptiveFollowerPreVote() {
+    void testDisruptiveFollowerPreVote() throws RaftException {
         Raft n1 = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft n2 = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft n3 = newTestRaft(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -1499,7 +1499,7 @@ class RaftTest {
     // ==================== Batch 1 ====================
 
     @Test
-    void testProgressFlowControl() {
+    void testProgressFlowControl() throws RaftException {
         Config cfg = newTestConfig(1, 5, 1, newTestMemoryStorage(withPeers(1, 2)));
         cfg.maxInflightMsgs = 3;
         cfg.maxSizePerMsg = 2048;
@@ -1534,16 +1534,16 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderElectionOverwriteNewerLogs() {
+    void testLeaderElectionOverwriteNewerLogs() throws RaftException {
         testLeaderElectionOverwriteNewerLogsImpl(false);
     }
 
     @Test
-    void testLeaderElectionOverwriteNewerLogsPreVote() {
+    void testLeaderElectionOverwriteNewerLogsPreVote() throws RaftException {
         testLeaderElectionOverwriteNewerLogsImpl(true);
     }
 
-    private void testLeaderElectionOverwriteNewerLogsImpl(boolean preVote) {
+    private void testLeaderElectionOverwriteNewerLogsImpl(boolean preVote) throws RaftException {
         Consumer<Config> cfg = preVote ? c -> c.preVote = true : null;
         Network n = Network.newNetworkWithConfig(cfg,
                 Network.entsWithConfig(cfg, 1),     // Node 1: Won first election
@@ -1576,7 +1576,7 @@ class RaftTest {
     }
 
     @Test
-    void testLearnerLogReplication() {
+    void testLearnerLogReplication() throws RaftException {
         MemoryStorage s1 = newTestMemoryStorage(withPeers(1), withLearners(2));
         Raft n1 = newTestRaft(1, 10, 1, s1);
         Raft n2 = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1), withLearners(2)));
@@ -1611,7 +1611,7 @@ class RaftTest {
     }
 
     @Test
-    void testLearnerPromotion() {
+    void testLearnerPromotion() throws RaftException {
         Raft n1 = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1), withLearners(2)));
         Raft n2 = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1), withLearners(2)));
 
@@ -1654,7 +1654,7 @@ class RaftTest {
     }
 
     @Test
-    void testDuelingPreCandidates() {
+    void testDuelingPreCandidates() throws RaftException {
         Config cfgA = newTestConfig(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         cfgA.preVote = true;
         Config cfgB = newTestConfig(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -1693,7 +1693,7 @@ class RaftTest {
     }
 
     @Test
-    void testRaftFreesReadOnlyMem() {
+    void testRaftFreesReadOnlyMem() throws RaftException {
         Raft sm = newTestRaft(1, 5, 1, newTestMemoryStorage(withPeers(1, 2)));
         sm.becomeCandidate();
         sm.becomeLeader();
@@ -1716,7 +1716,7 @@ class RaftTest {
     }
 
     @Test
-    void testMsgAppRespWaitReset() {
+    void testMsgAppRespWaitReset() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1, 2, 3));
         Raft sm = newTestRaft(1, 5, 1, s);
         sm.becomeCandidate();
@@ -1751,16 +1751,16 @@ class RaftTest {
     }
 
     @Test
-    void testRecvMsgVote() {
+    void testRecvMsgVote() throws RaftException {
         testRecvMsgVoteImpl(Eraftpb.MessageType.MsgRequestVote);
     }
 
     @Test
-    void testRecvMsgPreVote() {
+    void testRecvMsgPreVote() throws RaftException {
         testRecvMsgVoteImpl(Eraftpb.MessageType.MsgRequestPreVote);
     }
 
-    private void testRecvMsgVoteImpl(Eraftpb.MessageType msgType) {
+    private void testRecvMsgVoteImpl(Eraftpb.MessageType msgType) throws RaftException {
         record TC(RaftStateType state, long index, long logTerm, long voteFor, boolean wreject) {}
         List<TC> tests = List.of(
                 new TC(RaftStateType.StateFollower, 0, 0, Util.NONE, true),
@@ -1817,16 +1817,16 @@ class RaftTest {
     }
 
     @Test
-    void testCandidateResetTermMsgHeartbeat() {
+    void testCandidateResetTermMsgHeartbeat() throws RaftException {
         testCandidateResetTermImpl(Eraftpb.MessageType.MsgHeartbeat);
     }
 
     @Test
-    void testCandidateResetTermMsgApp() {
+    void testCandidateResetTermMsgApp() throws RaftException {
         testCandidateResetTermImpl(Eraftpb.MessageType.MsgAppend);
     }
 
-    private void testCandidateResetTermImpl(Eraftpb.MessageType mt) {
+    private void testCandidateResetTermImpl(Eraftpb.MessageType mt) throws RaftException {
         Raft a = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft b = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft c = newTestRaft(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -1864,7 +1864,7 @@ class RaftTest {
     }
 
     @Test
-    void testPastElectionTimeout() {
+    void testPastElectionTimeout() throws RaftException {
         record TC(int elapse, double wprobability, boolean round) {}
         List<TC> tests = List.of(
                 new TC(5, 0, false),
@@ -1893,7 +1893,7 @@ class RaftTest {
     }
 
     @Test
-    void testReadOnlyOptionSafe() {
+    void testReadOnlyOptionSafe() throws RaftException {
         Raft a = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft b = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft c = newTestRaft(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -1938,7 +1938,7 @@ class RaftTest {
     }
 
     @Test
-    void testReadOnlyOptionLease() {
+    void testReadOnlyOptionLease() throws RaftException {
         Raft a = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft b = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft c = newTestRaft(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -2038,7 +2038,7 @@ class RaftTest {
     }
 
     @Test
-    void testReadOnlyWithLearner() {
+    void testReadOnlyWithLearner() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1), withLearners(2));
         Raft a = newTestRaft(1, 10, 1, s);
         Raft b = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1), withLearners(2)));
@@ -2079,7 +2079,7 @@ class RaftTest {
     }
 
     @Test
-    void testReadOnlyDuplicateRequest() {
+    void testReadOnlyDuplicateRequest() throws RaftException {
         Raft r1 = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft r2 = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft r3 = newTestRaft(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -2158,7 +2158,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderAppResp() {
+    void testLeaderAppResp() throws RaftException {
         record AppTC(long index, boolean reject, long wmatch, long wnext, int wmsgNum, long windex, long wcommitted) {}
         List<AppTC> tests = List.of(
                 new AppTC(3, true, 0, 3, 0, 0, 0),
@@ -2222,7 +2222,7 @@ class RaftTest {
     }
 
     @Test
-    void testRestoreWithVotersOutgoing() {
+    void testRestoreWithVotersOutgoing() throws RaftException {
         Eraftpb.Snapshot snap = Eraftpb.Snapshot.newBuilder()
                 .setMetadata(Eraftpb.SnapshotMetadata.newBuilder()
                         .setIndex(11).setTerm(11)
@@ -2243,7 +2243,7 @@ class RaftTest {
     }
 
     @Test
-    void testRestoreVoterToLearner() {
+    void testRestoreVoterToLearner() throws RaftException {
         Eraftpb.Snapshot snap = Eraftpb.Snapshot.newBuilder()
                 .setMetadata(Eraftpb.SnapshotMetadata.newBuilder()
                         .setIndex(11).setTerm(11)
@@ -2258,7 +2258,7 @@ class RaftTest {
     }
 
     @Test
-    void testRestoreLearnerPromotion() {
+    void testRestoreLearnerPromotion() throws RaftException {
         Eraftpb.Snapshot snap = Eraftpb.Snapshot.newBuilder()
                 .setMetadata(Eraftpb.SnapshotMetadata.newBuilder()
                         .setIndex(11).setTerm(11)
@@ -2356,7 +2356,7 @@ class RaftTest {
     }
 
     @Test
-    void testRestoreFromSnapMsg() {
+    void testRestoreFromSnapMsg() throws RaftException {
         Eraftpb.Snapshot snap = Eraftpb.Snapshot.newBuilder()
                 .setMetadata(Eraftpb.SnapshotMetadata.newBuilder()
                         .setIndex(11).setTerm(11)
@@ -2411,7 +2411,7 @@ class RaftTest {
     }
 
     @Test
-    void testStepConfig() {
+    void testStepConfig() throws RaftException {
         Raft r = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2)));
         r.becomeCandidate();
         r.becomeLeader();
@@ -2447,7 +2447,7 @@ class RaftTest {
     }
 
     @Test
-    void testNewLeaderPendingConfig() {
+    void testNewLeaderPendingConfig() throws RaftException {
         record TC(boolean addEntry, long wpendingIndex) {}
         List<TC> tests = List.of(new TC(false, 0), new TC(true, 1));
         for (int i = 0; i < tests.size(); i++) {
@@ -2464,7 +2464,7 @@ class RaftTest {
     }
 
     @Test
-    void testAddNode() {
+    void testAddNode() throws RaftException {
         Raft r = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1)));
         r.applyConfChange(Eraftpb.ConfChangeV2.newBuilder()
                 .addChanges(Eraftpb.ConfChangeSingle.newBuilder()
@@ -2473,7 +2473,7 @@ class RaftTest {
     }
 
     @Test
-    void testAddLearner() {
+    void testAddLearner() throws RaftException {
         Raft r = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1)));
         r.applyConfChange(Eraftpb.ConfChangeV2.newBuilder()
                 .addChanges(Eraftpb.ConfChangeSingle.newBuilder()
@@ -2504,7 +2504,7 @@ class RaftTest {
     }
 
     @Test
-    void testAddNodeCheckQuorum() {
+    void testAddNodeCheckQuorum() throws RaftException {
         Raft r = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1)));
         r.checkQuorum = true;
         r.becomeCandidate();
@@ -2530,7 +2530,7 @@ class RaftTest {
     }
 
     @Test
-    void testRemoveNode() {
+    void testRemoveNode() throws RaftException {
         Raft r = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2)));
         r.applyConfChange(Eraftpb.ConfChangeV2.newBuilder()
                 .addChanges(Eraftpb.ConfChangeSingle.newBuilder()
@@ -2539,7 +2539,7 @@ class RaftTest {
     }
 
     @Test
-    void testRemoveLearner() {
+    void testRemoveLearner() throws RaftException {
         Raft r = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1), withLearners(2)));
         r.applyConfChange(Eraftpb.ConfChangeV2.newBuilder()
                 .addChanges(Eraftpb.ConfChangeSingle.newBuilder()
@@ -2549,7 +2549,7 @@ class RaftTest {
     }
 
     @Test
-    void testRaftNodes() {
+    void testRaftNodes() throws RaftException {
         Raft r = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         assertThat(r.trk.voterNodes()).containsExactly(1L, 2L, 3L);
     }
@@ -2601,7 +2601,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderTransferToUpToDateNodeFromFollower() {
+    void testLeaderTransferToUpToDateNodeFromFollower() throws RaftException {
         Network nt = newNetwork(null, null, null);
         nt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgHup).build());
@@ -2624,7 +2624,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderTransferWithCheckQuorum() {
+    void testLeaderTransferWithCheckQuorum() throws RaftException {
         Network nt = newNetwork(null, null, null);
         for (long i = 1; i <= 3; i++) {
             Raft r = nt.peer(i);
@@ -2656,7 +2656,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderTransferToSlowFollower() {
+    void testLeaderTransferToSlowFollower() throws RaftException {
         Network nt = newNetwork(null, null, null);
         nt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgHup).build());
@@ -2722,7 +2722,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderTransferTimeout() {
+    void testLeaderTransferTimeout() throws RaftException {
         Network nt = newNetwork(null, null, null);
         nt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgHup).build());
@@ -2764,7 +2764,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderTransferReceiveHigherTermVote() {
+    void testLeaderTransferReceiveHigherTermVote() throws RaftException {
         Network nt = newNetwork(null, null, null);
         nt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgHup).build());
@@ -2782,7 +2782,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderTransferRemoveNode() {
+    void testLeaderTransferRemoveNode() throws RaftException {
         Network nt = newNetwork(null, null, null);
         nt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgHup).build());
@@ -2801,7 +2801,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderTransferDemoteNode() {
+    void testLeaderTransferDemoteNode() throws RaftException {
         Network nt = newNetwork(null, null, null);
         nt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgHup).build());
@@ -2824,7 +2824,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderTransferBack() {
+    void testLeaderTransferBack() throws RaftException {
         Network nt = newNetwork(null, null, null);
         nt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgHup).build());
@@ -2843,7 +2843,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderTransferSecondTransferToAnotherNode() {
+    void testLeaderTransferSecondTransferToAnotherNode() throws RaftException {
         Network nt = newNetwork(null, null, null);
         nt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgHup).build());
@@ -2862,7 +2862,7 @@ class RaftTest {
     }
 
     @Test
-    void testLeaderTransferSecondTransferToSameNode() {
+    void testLeaderTransferSecondTransferToSameNode() throws RaftException {
         Network nt = newNetwork(null, null, null);
         nt.send(Eraftpb.Message.newBuilder().setFrom(1).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgHup).build());
@@ -2885,7 +2885,7 @@ class RaftTest {
     }
 
     @Test
-    void testTransferNonMember() {
+    void testTransferNonMember() throws RaftException {
         Raft r = newTestRaft(1, 5, 1, newTestMemoryStorage(withPeers(2, 3, 4)));
         r.step(Eraftpb.Message.newBuilder().setFrom(2).setTo(1)
                 .setMsgType(Eraftpb.MessageType.MsgTimeoutNow).build());
@@ -2897,7 +2897,7 @@ class RaftTest {
     }
 
     @Test
-    void testNodeWithSmallerTermCanCompleteElection() {
+    void testNodeWithSmallerTermCanCompleteElection() throws RaftException {
         Raft n1 = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft n2 = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft n3 = newTestRaft(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -2944,7 +2944,7 @@ class RaftTest {
     }
 
     @Test
-    void testPreVoteWithSplitVote() {
+    void testPreVoteWithSplitVote() throws RaftException {
         Raft n1 = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft n2 = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft n3 = newTestRaft(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -2981,7 +2981,7 @@ class RaftTest {
     }
 
     @Test
-    void testPreVoteWithCheckQuorum() {
+    void testPreVoteWithCheckQuorum() throws RaftException {
         Raft n1 = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft n2 = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft n3 = newTestRaft(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -3011,7 +3011,7 @@ class RaftTest {
     }
 
     @Test
-    void testLearnerCampaign() {
+    void testLearnerCampaign() throws RaftException {
         Raft n1 = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1)));
         n1.applyConfChange(Eraftpb.ConfChangeV2.newBuilder()
                 .addChanges(Eraftpb.ConfChangeSingle.newBuilder()
@@ -3039,7 +3039,7 @@ class RaftTest {
         assertThat(n2.state).isEqualTo(RaftStateType.StateFollower);
     }
 
-    private Network newPreVoteMigrationCluster() {
+    private Network newPreVoteMigrationCluster() throws RaftException {
         Raft n1 = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft n2 = newTestRaft(2, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Raft n3 = newTestRaft(3, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
@@ -3079,7 +3079,7 @@ class RaftTest {
     }
 
     @Test
-    void testPreVoteMigrationCanCompleteElection() {
+    void testPreVoteMigrationCanCompleteElection() throws RaftException {
         Network nt = newPreVoteMigrationCluster();
         Raft n2 = nt.peer(2);
         Raft n3 = nt.peer(3);
@@ -3104,7 +3104,7 @@ class RaftTest {
     }
 
     @Test
-    void testPreVoteMigrationWithFreeStuckPreCandidate() {
+    void testPreVoteMigrationWithFreeStuckPreCandidate() throws RaftException {
         Network nt = newPreVoteMigrationCluster();
         Raft n1 = nt.peer(1);
         Raft n2 = nt.peer(2);
@@ -3130,16 +3130,16 @@ class RaftTest {
     }
 
     @Test
-    void testConfChangeCheckBeforeCampaign() {
+    void testConfChangeCheckBeforeCampaign() throws RaftException {
         testConfChangeCheckBeforeCampaignImpl(false);
     }
 
     @Test
-    void testConfChangeV2CheckBeforeCampaign() {
+    void testConfChangeV2CheckBeforeCampaign() throws RaftException {
         testConfChangeCheckBeforeCampaignImpl(true);
     }
 
-    private void testConfChangeCheckBeforeCampaignImpl(boolean v2) {
+    private void testConfChangeCheckBeforeCampaignImpl(boolean v2) throws RaftException {
         Network nt = newNetwork(null, null, null);
         Raft n1 = nt.peer(1);
         Raft n2 = nt.peer(2);
@@ -3275,7 +3275,7 @@ class RaftTest {
     }
 
     @Test
-    void testLogReplicationWithReorderedMessage() {
+    void testLogReplicationWithReorderedMessage() throws RaftException {
         Raft r1 = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2)));
         r1.becomeCandidate();
         r1.becomeLeader();

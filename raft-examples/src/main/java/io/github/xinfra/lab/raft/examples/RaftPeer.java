@@ -109,10 +109,15 @@ public class RaftPeer implements AutoCloseable {
             this.node = Node.restartNode(cfg);
         }
 
-        // Wire transport: receiver routes to the node's step().
+        // Wire transport: receiver routes to the node's step(). Raft-layer
+        // rejections (e.g. forwarded proposal hitting ErrProposalDropped on a
+        // demoted leader) are not fatal to the transport — log and continue.
         transport.setReceiver(msg -> {
             try { node.step(msg); }
             catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            catch (RaftException e) {
+                // Best-effort: the sender will retry via raft's normal flow.
+            }
         });
 
         // Zero-copy snapshots are only end-to-end when BOTH the Storage and the
@@ -243,17 +248,17 @@ public class RaftPeer implements AutoCloseable {
         });
     }
 
-    public RaftException propose(byte[] data) throws InterruptedException {
-        return node.propose(data);
+    public void propose(byte[] data) throws InterruptedException, RaftException {
+        node.propose(data);
     }
 
     /**
      * Propose a (V2) configuration change — add/remove voters or learners.
-     * Returns a {@link RaftException} if the proposal was dropped (e.g. this
+     * Throws {@link RaftException} if the proposal was dropped (e.g. this
      * node is not the leader, or a conf change is already in flight).
      */
-    public RaftException proposeConfChange(Eraftpb.ConfChangeV2 cc) throws InterruptedException {
-        return node.proposeConfChange(cc);
+    public void proposeConfChange(Eraftpb.ConfChangeV2 cc) throws InterruptedException, RaftException {
+        node.proposeConfChange(cc);
     }
 
     /**

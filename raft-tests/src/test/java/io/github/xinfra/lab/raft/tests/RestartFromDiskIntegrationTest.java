@@ -55,7 +55,7 @@ class RestartFromDiskIntegrationTest {
 
             assertThat(awaitTrue(() -> p.basicStatus().state == RaftStateType.StateLeader, 5_000)).isTrue();
             for (int i = 0; i < 3; i++) {
-                assertThat(p.propose(("v" + i).getBytes())).isNull();
+                p.propose(("v" + i).getBytes());
             }
             assertThat(awaitTrue(() -> phase1Apply.size() == 3, 5_000)).isTrue();
 
@@ -93,7 +93,7 @@ class RestartFromDiskIntegrationTest {
             assertThat(phase2Apply).as("no re-apply of phase-1 entries").isEmpty();
 
             // Propose a new entry and verify it applies normally.
-            assertThat(p2.propose("after-restart".getBytes())).isNull();
+            p2.propose("after-restart".getBytes());
             assertThat(awaitTrue(() -> !phase2Apply.isEmpty(), 5_000)).isTrue();
             assertThat(phase2Apply).containsExactly("after-restart");
         }

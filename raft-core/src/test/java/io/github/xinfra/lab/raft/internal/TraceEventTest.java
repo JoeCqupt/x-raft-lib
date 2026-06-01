@@ -57,7 +57,7 @@ class TraceEventTest {
      * Single-node bootstrap: must emit InitState then BecomeFollower.
      */
     @Test
-    void initStateAndFollowerEmittedOnBoot() {
+    void initStateAndFollowerEmittedOnBoot() throws RaftException {
         RecordingTraceLogger trace = new RecordingTraceLogger();
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
         Config cfg = newTestConfig(1, 10, 1, s);

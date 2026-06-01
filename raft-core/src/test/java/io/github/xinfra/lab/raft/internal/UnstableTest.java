@@ -46,7 +46,7 @@ class UnstableTest {
     // ============= TestUnstableMaybeFirstIndex =============
 
     @Test
-    void testMaybeFirstIndex_noSnapshot() {
+    void testMaybeFirstIndex_noSnapshot() throws RaftException {
         // entries but no snapshot
         Unstable u = newUnstable(5, 5, index(5).terms(1), null, false);
         assertThat(u.maybeFirstIndex()).isEmpty();
@@ -57,7 +57,7 @@ class UnstableTest {
     }
 
     @Test
-    void testMaybeFirstIndex_withSnapshot() {
+    void testMaybeFirstIndex_withSnapshot() throws RaftException {
         // has snapshot with entries
         Unstable u = newUnstable(5, 5, index(5).terms(1), snapshot(4, 1), false);
         assertThat(u.maybeFirstIndex()).hasValue(5);
@@ -70,7 +70,7 @@ class UnstableTest {
     // ============= TestMaybeLastIndex =============
 
     @Test
-    void testMaybeLastIndex() {
+    void testMaybeLastIndex() throws RaftException {
         // last in entries
         assertThat(newUnstable(5, 5, index(5).terms(1), null, false).maybeLastIndex()).hasValue(5);
         assertThat(newUnstable(5, 5, index(5).terms(1), snapshot(4, 1), false).maybeLastIndex()).hasValue(5);
@@ -83,7 +83,7 @@ class UnstableTest {
     // ============= TestUnstableMaybeTerm =============
 
     @Test
-    void testMaybeTerm() {
+    void testMaybeTerm() throws RaftException {
         // term from entries
         assertThat(newUnstable(5, 5, index(5).terms(1), null, false).maybeTerm(5)).hasValue(1);
         assertThat(newUnstable(5, 5, index(5).terms(1), null, false).maybeTerm(6)).isEmpty();
@@ -108,7 +108,7 @@ class UnstableTest {
     // ============= TestUnstableRestore =============
 
     @Test
-    void testRestore() {
+    void testRestore() throws RaftException {
         Unstable u = newUnstable(5, 6, index(5).terms(1), snapshot(4, 1), true);
         Eraftpb.Snapshot s = snapshot(6, 2);
         u.restore(s);
@@ -122,7 +122,7 @@ class UnstableTest {
     // ============= TestUnstableNextEntries =============
 
     @Test
-    void testNextEntries() {
+    void testNextEntries() throws RaftException {
         // nothing in progress
         assertThat(newUnstable(5, 5, index(5).terms(1, 1), null, false).nextEntries())
                 .isEqualTo(index(5).terms(1, 1));
@@ -139,7 +139,7 @@ class UnstableTest {
     // ============= TestUnstableNextSnapshot =============
 
     @Test
-    void testNextSnapshot() {
+    void testNextSnapshot() throws RaftException {
         Eraftpb.Snapshot s = snapshot(4, 1);
 
         // no snapshot
@@ -153,7 +153,7 @@ class UnstableTest {
     // ============= TestUnstableAcceptInProgress =============
 
     @Test
-    void testAcceptInProgress() {
+    void testAcceptInProgress() throws RaftException {
         // no entries, no snapshot
         Unstable u1 = newUnstable(5, 5, List.of(), null, false);
         u1.acceptInProgress();
@@ -195,7 +195,7 @@ class UnstableTest {
     // ============= TestUnstableStableTo =============
 
     @Test
-    void testStableTo() {
+    void testStableTo() throws RaftException {
         // empty
         Unstable u0 = new Unstable(0);
         u0.stableTo(new EntryID(1, 5));
@@ -239,7 +239,7 @@ class UnstableTest {
     // ============= TestUnstableTruncateAndAppend =============
 
     @Test
-    void testTruncateAndAppend() {
+    void testTruncateAndAppend() throws RaftException {
         // append to the end
         Unstable u1 = newUnstable(5, 5, index(5).terms(1), null, false);
         u1.truncateAndAppend(index(6).terms(1, 1));

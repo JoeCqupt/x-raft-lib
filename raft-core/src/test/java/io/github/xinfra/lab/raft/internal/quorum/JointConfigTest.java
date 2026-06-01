@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class JointConfigTest {
 
     @Test
-    void testJointCommittedIndex() {
+    void testJointCommittedIndex() throws RaftException {
         MajorityConfig incoming = new MajorityConfig(Set.of(1L, 2L, 3L));
         MajorityConfig outgoing = new MajorityConfig(Set.of(1L, 2L, 4L));
         JointConfig jc = new JointConfig(incoming, outgoing);
@@ -50,7 +50,7 @@ class JointConfigTest {
     }
 
     @Test
-    void testJointCommittedIndex_emptyOutgoing() {
+    void testJointCommittedIndex_emptyOutgoing() throws RaftException {
         MajorityConfig incoming = new MajorityConfig(Set.of(1L, 2L, 3L));
         JointConfig jc = new JointConfig(incoming, null);
 
@@ -67,7 +67,7 @@ class JointConfigTest {
     }
 
     @Test
-    void testJointVoteResult_bothWon() {
+    void testJointVoteResult_bothWon() throws RaftException {
         MajorityConfig incoming = new MajorityConfig(Set.of(1L, 2L, 3L));
         MajorityConfig outgoing = new MajorityConfig(Set.of(1L, 2L, 4L));
         JointConfig jc = new JointConfig(incoming, outgoing);
@@ -81,7 +81,7 @@ class JointConfigTest {
     }
 
     @Test
-    void testJointVoteResult_oneLost() {
+    void testJointVoteResult_oneLost() throws RaftException {
         MajorityConfig incoming = new MajorityConfig(Set.of(1L, 2L, 3L));
         MajorityConfig outgoing = new MajorityConfig(Set.of(1L, 2L, 4L));
         JointConfig jc = new JointConfig(incoming, outgoing);
@@ -98,7 +98,7 @@ class JointConfigTest {
     }
 
     @Test
-    void testJointVoteResult_pending() {
+    void testJointVoteResult_pending() throws RaftException {
         MajorityConfig incoming = new MajorityConfig(Set.of(1L, 2L, 3L));
         MajorityConfig outgoing = new MajorityConfig(Set.of(1L, 2L, 4L));
         JointConfig jc = new JointConfig(incoming, outgoing);
@@ -118,7 +118,7 @@ class JointConfigTest {
     }
 
     @Test
-    void testJointIds() {
+    void testJointIds() throws RaftException {
         MajorityConfig incoming = new MajorityConfig(Set.of(1L, 2L, 3L));
         MajorityConfig outgoing = new MajorityConfig(Set.of(2L, 3L, 4L));
         JointConfig jc = new JointConfig(incoming, outgoing);

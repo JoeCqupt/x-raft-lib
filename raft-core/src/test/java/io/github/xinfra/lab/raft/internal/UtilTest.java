@@ -30,7 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class UtilTest {
 
     @Test
-    void testDescribeEntry() {
+    void testDescribeEntry() throws RaftException {
         Eraftpb.Entry entry = Eraftpb.Entry.newBuilder()
                 .setTerm(1)
                 .setIndex(2)
@@ -47,7 +47,7 @@ class UtilTest {
     }
 
     @Test
-    void testLimitSize() {
+    void testLimitSize() throws RaftException {
         List<Eraftpb.Entry> ents = List.of(
                 Eraftpb.Entry.newBuilder().setIndex(4).setTerm(4).build(),
                 Eraftpb.Entry.newBuilder().setIndex(5).setTerm(5).build(),
@@ -74,7 +74,7 @@ class UtilTest {
     }
 
     @Test
-    void testIsLocalMsg() {
+    void testIsLocalMsg() throws RaftException {
         assertThat(Util.isLocalMsg(Eraftpb.MessageType.MsgHup)).isTrue();
         assertThat(Util.isLocalMsg(Eraftpb.MessageType.MsgBeat)).isTrue();
         assertThat(Util.isLocalMsg(Eraftpb.MessageType.MsgUnreachable)).isTrue();
@@ -102,7 +102,7 @@ class UtilTest {
     }
 
     @Test
-    void testIsResponseMsg() {
+    void testIsResponseMsg() throws RaftException {
         assertThat(Util.isResponseMsg(Eraftpb.MessageType.MsgAppendResponse)).isTrue();
         assertThat(Util.isResponseMsg(Eraftpb.MessageType.MsgRequestVoteResponse)).isTrue();
         assertThat(Util.isResponseMsg(Eraftpb.MessageType.MsgHeartbeatResponse)).isTrue();
@@ -130,7 +130,7 @@ class UtilTest {
     }
 
     @Test
-    void testPayloadSizeOfEmptyEntry() {
+    void testPayloadSizeOfEmptyEntry() throws RaftException {
         Eraftpb.Entry e = Eraftpb.Entry.getDefaultInstance();
         assertThat(Util.payloadSize(e)).isZero();
     }

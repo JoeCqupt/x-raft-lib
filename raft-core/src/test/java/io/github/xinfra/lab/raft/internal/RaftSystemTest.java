@@ -93,7 +93,7 @@ class RaftSystemTest {
         }
 
         /** Run a single tick across all alive nodes, then drain readies/messages. */
-        void tick() {
+        void tick() throws RaftException {
             for (Node n : nodes.values()) {
                 if (n.alive) n.rn.tick();
             }
@@ -101,7 +101,7 @@ class RaftSystemTest {
         }
 
         /** Drain all readies + inbox messages until quiescent. */
-        void drainAll() {
+        void drainAll() throws RaftException {
             for (int iter = 0; iter < 100; iter++) {
                 boolean progress = false;
                 for (Node n : nodes.values()) {
@@ -128,7 +128,7 @@ class RaftSystemTest {
         }
 
         /** Deliver a message, respecting partitions and crashes. */
-        private void deliver(Node from, Eraftpb.Message m) {
+        private void deliver(Node from, Eraftpb.Message m) throws RaftException {
             if (partitionedNodes.contains(from.id)) return;
             Node target = nodes.get(m.getTo());
             if (target == null || !target.alive) return;
@@ -136,25 +136,25 @@ class RaftSystemTest {
             target.inbox.add(m);
         }
 
-        void campaign(long id) {
+        void campaign(long id) throws RaftException {
             nodes.get(id).rn.campaign();
             drainAll();
         }
 
-        void propose(long id, byte[] data) {
+        void propose(long id, byte[] data) throws RaftException {
             nodes.get(id).rn.propose(data);
             drainAll();
         }
 
         /** Run for {@code ticks} ticks (each = one round across all nodes). */
-        void run(int ticks) {
+        void run(int ticks) throws RaftException {
             for (int i = 0; i < ticks; i++) tick();
         }
 
         /** Stop a node from participating until {@link #revive} is called. */
-        void crash(long id) { nodes.get(id).alive = false; }
+        void crash(long id) throws RaftException { nodes.get(id).alive = false; }
 
-        void revive(long id) {
+        void revive(long id) throws RaftException {
             nodes.get(id).alive = true;
             // Drain any pending Ready that accumulated while alive=false. We
             // didn't actually pause Ready production (rn was still ticking),
@@ -162,9 +162,9 @@ class RaftSystemTest {
             drainAll();
         }
 
-        void partition(long id) { partitionedNodes.add(id); }
-        void heal(long id)      { partitionedNodes.remove(id); }
-        void healAll()          { partitionedNodes.clear(); }
+        void partition(long id) throws RaftException { partitionedNodes.add(id); }
+        void heal(long id) throws RaftException { partitionedNodes.remove(id); }
+        void healAll() throws RaftException { partitionedNodes.clear(); }
 
         Node node(long id) { return nodes.get(id); }
 
@@ -181,7 +181,7 @@ class RaftSystemTest {
      * Baseline: 3 nodes elect a leader, propose, and converge on the same log.
      */
     @Test
-    void threeNodeBasicReplication() {
+    void threeNodeBasicReplication() throws RaftException {
         Sim s = new Sim(1, 2, 3);
         s.campaign(1);
         s.run(2);
@@ -207,7 +207,7 @@ class RaftSystemTest {
      * one and continue replicating.
      */
     @Test
-    void leaderFailureTriggersNewElection() {
+    void leaderFailureTriggersNewElection() throws RaftException {
         Sim s = new Sim(1, 2, 3);
         s.campaign(1);
         s.run(2);
@@ -241,7 +241,7 @@ class RaftSystemTest {
      * once the partition is removed. The final state must be consistent.
      */
     @Test
-    void partitionHealConverges() {
+    void partitionHealConverges() throws RaftException {
         Sim s = new Sim(1, 2, 3);
         s.campaign(1);
         s.run(2);
@@ -276,7 +276,7 @@ class RaftSystemTest {
      * commits the same set of entries by the end (committedHistory equality).
      */
     @Test
-    void interleavedProposalsAndPartitionConverge() {
+    void interleavedProposalsAndPartitionConverge() throws RaftException {
         Sim s = new Sim(1, 2, 3);
         s.campaign(1);
         s.run(2);

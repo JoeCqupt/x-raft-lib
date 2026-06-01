@@ -1,0 +1,19 @@
+# Default owner for everything in the repo. Required by GitHub branch
+# protection ("Require review from Code Owners") and clarifies who to
+# ping on PRs.
+*       @JoeCqupt
+
+# Release / publish infrastructure: any change here can break Maven
+# Central uploads, so it gets a separate codeowner line so the rule
+# survives even if `*` is overridden later.
+/.github/workflows/maven-publish.yml    @JoeCqupt
+/.github/workflows/release.yml          @JoeCqupt
+/pom.xml                                @JoeCqupt
+
+# Wire schema: protobuf changes affect on-disk/on-wire compatibility
+# for every downstream user.
+/raft-proto/                            @JoeCqupt
+
+# Security-sensitive surfaces.
+/SECURITY.md                            @JoeCqupt
+/raft-transport-grpc/src/main/java/io/github/xinfra/lab/raft/transport/grpc/TlsConfig.java   @JoeCqupt

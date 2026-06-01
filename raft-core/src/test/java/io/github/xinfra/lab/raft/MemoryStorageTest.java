@@ -73,7 +73,7 @@ class MemoryStorageTest {
     }
 
     @Test
-    void testStorageLastIndex() {
+    void testStorageLastIndex() throws RaftException {
         List<Eraftpb.Entry> ents = index(3).terms(3, 4, 5);
         MemoryStorage s = new MemoryStorage(ents);
 
@@ -95,7 +95,7 @@ class MemoryStorageTest {
     }
 
     @Test
-    void testStorageCompact() {
+    void testStorageCompact() throws RaftException {
         List<Eraftpb.Entry> ents = index(3).terms(3, 4, 5);
 
         assertCompact(ents, 2, RaftException.ErrCompacted, 3, 3, 3);
@@ -137,7 +137,7 @@ class MemoryStorageTest {
     }
 
     @Test
-    void testStorageAppend() {
+    void testStorageAppend() throws RaftException {
         List<Eraftpb.Entry> ents = index(3).terms(3, 4, 5);
 
         assertAppend(ents, index(1).terms(1, 2), index(3).terms(3, 4, 5));

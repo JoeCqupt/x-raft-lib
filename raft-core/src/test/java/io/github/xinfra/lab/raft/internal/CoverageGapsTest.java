@@ -41,7 +41,7 @@ class CoverageGapsTest {
     // ============= Status.toJson — for both follower and leader =============
 
     @Test
-    void statusFollowerToJsonOmitsProgress() {
+    void statusFollowerToJsonOmitsProgress() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1, 2, 3));
         Config cfg = newTestConfig(1, 10, 1, s);
         cfg.maxSizePerMsg = NO_LIMIT;
@@ -91,7 +91,7 @@ class CoverageGapsTest {
     // ============= Util.describe* helpers =============
 
     @Test
-    void utilDescribeHardState() {
+    void utilDescribeHardState() throws RaftException {
         Eraftpb.HardState empty = Eraftpb.HardState.getDefaultInstance();
         assertThat(Util.describeHardState(empty)).isEqualTo("Term:0 Commit:0");
 
@@ -102,13 +102,13 @@ class CoverageGapsTest {
     }
 
     @Test
-    void utilDescribeSoftState() {
+    void utilDescribeSoftState() throws RaftException {
         SoftState ss = new SoftState(2, RaftStateType.StateLeader);
         assertThat(Util.describeSoftState(ss)).isEqualTo("Lead:2 State:StateLeader");
     }
 
     @Test
-    void utilDescribeConfState() {
+    void utilDescribeConfState() throws RaftException {
         Eraftpb.ConfState cs = Eraftpb.ConfState.newBuilder()
                 .addVoters(1).addVoters(2).addLearners(3).build();
         String desc = Util.describeConfState(cs);
@@ -116,7 +116,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void utilDescribeSnapshot() {
+    void utilDescribeSnapshot() throws RaftException {
         Eraftpb.Snapshot snap = Eraftpb.Snapshot.newBuilder()
                 .setMetadata(Eraftpb.SnapshotMetadata.newBuilder()
                         .setIndex(42).setTerm(7)
@@ -126,7 +126,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void utilDescribeMessage() {
+    void utilDescribeMessage() throws RaftException {
         Eraftpb.Message m = Eraftpb.Message.newBuilder()
                 .setMsgType(Eraftpb.MessageType.MsgAppend)
                 .setFrom(1).setTo(2).setTerm(3).setLogTerm(2).setIndex(10).setCommit(8)
@@ -144,7 +144,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void utilDescribeMessageRejection() {
+    void utilDescribeMessageRejection() throws RaftException {
         Eraftpb.Message m = Eraftpb.Message.newBuilder()
                 .setMsgType(Eraftpb.MessageType.MsgAppendResponse)
                 .setFrom(2).setTo(1).setTerm(3).setReject(true).setRejectHint(5)
@@ -154,7 +154,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void utilDescribeTargetSpecialIds() {
+    void utilDescribeTargetSpecialIds() throws RaftException {
         assertThat(Util.describeTarget(Util.NONE)).isEqualTo("None");
         assertThat(Util.describeTarget(Util.LOCAL_APPEND_THREAD)).isEqualTo("AppendThread");
         assertThat(Util.describeTarget(Util.LOCAL_APPLY_THREAD)).isEqualTo("ApplyThread");
@@ -163,7 +163,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void utilDescribeReadyNonEmpty() {
+    void utilDescribeReadyNonEmpty() throws RaftException {
         Ready rd = new Ready();
         rd.softState = new SoftState(1, RaftStateType.StateLeader);
         rd.hardState = Eraftpb.HardState.newBuilder().setTerm(2).setCommit(1).build();
@@ -185,7 +185,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void utilDescribeReadyEmpty() {
+    void utilDescribeReadyEmpty() throws RaftException {
         Ready rd = new Ready();
         rd.entries = List.of();
         rd.committedEntries = List.of();
@@ -198,7 +198,7 @@ class CoverageGapsTest {
     // ============= Config.validate error branches =============
 
     @Test
-    void configValidateRejectsNoneId() {
+    void configValidateRejectsNoneId() throws RaftException {
         Config c = new Config();
         c.id = Util.NONE;
         assertThatThrownBy(c::validate)
@@ -207,7 +207,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void configValidateRejectsLocalThreadId() {
+    void configValidateRejectsLocalThreadId() throws RaftException {
         Config c = new Config();
         c.id = Util.LOCAL_APPEND_THREAD;
         assertThatThrownBy(c::validate)
@@ -216,7 +216,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void configValidateRejectsBadTickValues() {
+    void configValidateRejectsBadTickValues() throws RaftException {
         Config c = new Config();
         c.id = 1;
         c.heartbeatTick = 0;
@@ -232,7 +232,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void configValidateRejectsMissingStorage() {
+    void configValidateRejectsMissingStorage() throws RaftException {
         Config c = new Config();
         c.id = 1;
         c.heartbeatTick = 1;
@@ -244,7 +244,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void configValidateRejectsZeroInflightMsgs() {
+    void configValidateRejectsZeroInflightMsgs() throws RaftException {
         Config c = new Config();
         c.id = 1;
         c.heartbeatTick = 1;
@@ -258,7 +258,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void configValidateRejectsInflightBytesBelowMsgSize() {
+    void configValidateRejectsInflightBytesBelowMsgSize() throws RaftException {
         Config c = new Config();
         c.id = 1;
         c.heartbeatTick = 1;
@@ -273,7 +273,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void configValidateRejectsLeaseBasedReadOnlyWithoutCheckQuorum() {
+    void configValidateRejectsLeaseBasedReadOnlyWithoutCheckQuorum() throws RaftException {
         Config c = new Config();
         c.id = 1;
         c.heartbeatTick = 1;
@@ -289,7 +289,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void configValidateSetsDefaultLogger() {
+    void configValidateSetsDefaultLogger() throws RaftException {
         Config c = new Config();
         c.id = 1;
         c.heartbeatTick = 1;
@@ -303,7 +303,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void configValidateRejectsZeroMaxSizePerMsg() {
+    void configValidateRejectsZeroMaxSizePerMsg() throws RaftException {
         Config c = new Config();
         c.id = 1;
         c.heartbeatTick = 1;
@@ -319,7 +319,7 @@ class CoverageGapsTest {
     // ============= DefaultRaftLogger.{:x} formatting =============
 
     @Test
-    void defaultRaftLoggerHexFormatHandlesLong() {
+    void defaultRaftLoggerHexFormatHandlesLong() throws RaftException {
         Object[] args = {0xABCDL, "ignored"};
         Object[] result = DefaultRaftLogger.convertHexArgs("{:x} reads {}", args);
         assertThat(result[0]).isEqualTo("abcd");
@@ -327,7 +327,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void defaultRaftLoggerHexFormatHandlesInteger() {
+    void defaultRaftLoggerHexFormatHandlesInteger() throws RaftException {
         Object[] args = {255, 42L};
         Object[] result = DefaultRaftLogger.convertHexArgs("{:x} term {:x}", args);
         assertThat(result[0]).isEqualTo("ff");
@@ -335,7 +335,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void defaultRaftLoggerHexFormatPassesThroughNonHex() {
+    void defaultRaftLoggerHexFormatPassesThroughNonHex() throws RaftException {
         Object[] args = {123L, "abc"};
         Object[] result = DefaultRaftLogger.convertHexArgs("count={} name={}", args);
         // No {:x} placeholders → input args returned unchanged.
@@ -343,7 +343,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void defaultRaftLoggerNormalizeFormat() {
+    void defaultRaftLoggerNormalizeFormat() throws RaftException {
         // Fast path: no replacement.
         assertThat(DefaultRaftLogger.normalizeFormat("count={}")).isEqualTo("count={}");
         // Replace.
@@ -355,7 +355,7 @@ class CoverageGapsTest {
     // ============= SnapshotStatus enum sanity =============
 
     @Test
-    void snapshotStatusEnumValues() {
+    void snapshotStatusEnumValues() throws RaftException {
         // Cover the enum so jacoco isn't 0% on it.
         assertThat(SnapshotStatus.values()).hasSize(2);
         assertThat(SnapshotStatus.valueOf("SnapshotFinish")).isEqualTo(SnapshotStatus.SnapshotFinish);
@@ -391,10 +391,10 @@ class CoverageGapsTest {
         n.advance();
 
         // readIndex: enqueues a MsgReadIndex.
-        assertThat(n.readIndex("ctx".getBytes())).isNull();
+        n.readIndex("ctx".getBytes());
 
         // forgetLeader: enqueues a MsgForgetLeader.
-        assertThat(n.forgetLeader()).isNull();
+        n.forgetLeader();
 
         // transferLeadership: enqueues a MsgTransferLeader. No assertion —
         // just exercise the path so jacoco hits the method.
@@ -446,7 +446,7 @@ class CoverageGapsTest {
     // ============= DefaultRaftLogger fatal/panic paths =============
 
     @Test
-    void defaultRaftLoggerFatalThrows() {
+    void defaultRaftLoggerFatalThrows() throws RaftException {
         DefaultRaftLogger logger = new DefaultRaftLogger("test-fatal");
         assertThatThrownBy(() -> logger.fatal("fatal: {}", "bad"))
                 .isInstanceOf(RuntimeException.class)
@@ -454,7 +454,7 @@ class CoverageGapsTest {
     }
 
     @Test
-    void defaultRaftLoggerPanicThrows() {
+    void defaultRaftLoggerPanicThrows() throws RaftException {
         DefaultRaftLogger logger = new DefaultRaftLogger("test-panic");
         assertThatThrownBy(() -> logger.panic("panic at {:x}", 0xDEADL))
                 .isInstanceOf(RuntimeException.class)
@@ -480,12 +480,12 @@ class CoverageGapsTest {
 
         n.stop();
 
-        // Every API path checks `if (done) return ...` at the top.
-        assertThat(n.propose("x".getBytes())).isEqualTo(RaftException.ErrStopped);
-        assertThat(n.campaign()).isEqualTo(RaftException.ErrStopped);
-        assertThat(n.readIndex("ctx".getBytes())).isEqualTo(RaftException.ErrStopped);
-        assertThat(n.forgetLeader()).isEqualTo(RaftException.ErrStopped);
-        assertThat(n.step(Eraftpb.Message.newBuilder()
+        // Every API path checks `if (done) throw ...` at the top.
+        assertThatThrownBy(() -> n.propose("x".getBytes())).isEqualTo(RaftException.ErrStopped);
+        assertThatThrownBy(() -> n.campaign()).isEqualTo(RaftException.ErrStopped);
+        assertThatThrownBy(() -> n.readIndex("ctx".getBytes())).isEqualTo(RaftException.ErrStopped);
+        assertThatThrownBy(() -> n.forgetLeader()).isEqualTo(RaftException.ErrStopped);
+        assertThatThrownBy(() -> n.step(Eraftpb.Message.newBuilder()
                 .setMsgType(Eraftpb.MessageType.MsgPropose).build()))
                 .isEqualTo(RaftException.ErrStopped);
 
@@ -513,7 +513,7 @@ class CoverageGapsTest {
      * `pendingTicks.decrementAndGet() + warn + return` runs.
      */
     @Test
-    void tickBurstLimitRejects() {
+    void tickBurstLimitRejects() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1));
         Config cfg = newTestConfig(1, 10, 1, s);
         cfg.maxSizePerMsg = NO_LIMIT;
@@ -566,7 +566,10 @@ class CoverageGapsTest {
             final int idx = i;
             futures.add(pool.submit(() -> {
                 try {
-                    return n.propose(("payload-" + idx).getBytes());
+                    n.propose(("payload-" + idx).getBytes());
+                    return null;
+                } catch (RaftException re) {
+                    return re;
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     return RaftException.ErrStopped;

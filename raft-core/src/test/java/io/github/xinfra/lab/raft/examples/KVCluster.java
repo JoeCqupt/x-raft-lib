@@ -91,7 +91,7 @@ public class KVCluster {
 
         /** Public read-only check: is this node currently the raft leader? */
         public boolean isLeader() {
-            return rn.basicStatus().softState.raftState == RaftStateType.StateLeader;
+            return rn.basicStatus().softState.raftState() == RaftStateType.StateLeader;
         }
     }
 
@@ -113,41 +113,43 @@ public class KVCluster {
     }
 
     /** Triggers an election by node {@code id} and runs to quiescence. */
-    public void electLeader(long id) {
+    public void electLeader(long id) throws RaftException {
         nodes.get(id).rn.campaign();
         run(50);
     }
 
     /** Proposes a KV command on the leader. Throws if there is no leader. */
-    public RaftException put(String key, String value) {
+    public void put(String key, String value) throws RaftException {
         Node l = leader();
         if (l == null) throw new IllegalStateException("no leader");
-        RaftException err = l.rn.propose(new KVStore.Command(
+        l.rn.propose(new KVStore.Command(
                 KVStore.Command.Op.PUT, key, value).serialize());
         run(50);
-        return err;
     }
 
-    public RaftException delete(String key) {
+    public void delete(String key) throws RaftException {
         Node l = leader();
         if (l == null) throw new IllegalStateException("no leader");
-        RaftException err = l.rn.propose(new KVStore.Command(
+        l.rn.propose(new KVStore.Command(
                 KVStore.Command.Op.DELETE, key, null).serialize());
         run(50);
-        return err;
     }
 
     /**
      * Run the cluster for up to {@code ticks} idle rounds; each idle round
      * fires a tick on every node (mirrors the AsyncStorageWritesTest harness).
      */
-    public void run(int ticks) {
+    public void run(int ticks) throws RaftException {
         int idle = 0;
         for (int i = 0; i < ticks; i++) {
             boolean progress = false;
             for (Node n : nodes.values()) {
                 while (!n.inbox.isEmpty()) {
-                    n.rn.step(n.inbox.remove(0));
+                    try {
+                        n.rn.step(n.inbox.remove(0));
+                    } catch (RaftException ignored) {
+                        // Simulated cluster ignores per-message rejections.
+                    }
                     progress = true;
                 }
                 if (n.rn.hasReady()) {
@@ -165,7 +167,7 @@ public class KVCluster {
         }
     }
 
-    private void handleReady(Node n) {
+    private void handleReady(Node n) throws RaftException {
         Ready rd = n.rn.ready();
         if (!rd.entries.isEmpty()) n.storage.append(rd.entries);
         if (rd.snapshot != null && !Util.isEmptySnap(rd.snapshot)) {

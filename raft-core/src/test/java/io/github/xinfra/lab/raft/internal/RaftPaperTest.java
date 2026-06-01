@@ -34,21 +34,21 @@ class RaftPaperTest {
 
     // Section 5.1: testUpdateTermFromMessage
     @Test
-    void testFollowerUpdateTermFromMessage() {
+    void testFollowerUpdateTermFromMessage() throws RaftException {
         testUpdateTermFromMessage(RaftStateType.StateFollower);
     }
 
     @Test
-    void testCandidateUpdateTermFromMessage() {
+    void testCandidateUpdateTermFromMessage() throws RaftException {
         testUpdateTermFromMessage(RaftStateType.StateCandidate);
     }
 
     @Test
-    void testLeaderUpdateTermFromMessage() {
+    void testLeaderUpdateTermFromMessage() throws RaftException {
         testUpdateTermFromMessage(RaftStateType.StateLeader);
     }
 
-    private void testUpdateTermFromMessage(RaftStateType state) {
+    private void testUpdateTermFromMessage(RaftStateType state) throws RaftException {
         Raft r = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         switch (state) {
             case StateFollower -> r.becomeFollower(1, 2);
@@ -65,7 +65,7 @@ class RaftPaperTest {
 
     // Section 5.1: TestRejectStaleTermMessage
     @Test
-    void testRejectStaleTermMessage() {
+    void testRejectStaleTermMessage() throws RaftException {
         Raft r = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         r.loadState(Eraftpb.HardState.newBuilder().setTerm(2).build());
 
@@ -77,14 +77,14 @@ class RaftPaperTest {
 
     // Section 5.2: TestStartAsFollower
     @Test
-    void testStartAsFollower() {
+    void testStartAsFollower() throws RaftException {
         Raft r = newTestRaft(1, 10, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         assertThat(r.state).isEqualTo(RaftStateType.StateFollower);
     }
 
     // Section 5.2: TestLeaderBcastBeat
     @Test
-    void testLeaderBcastBeat() {
+    void testLeaderBcastBeat() throws RaftException {
         int hi = 1;
         Raft r = newTestRaft(1, 10, hi, newTestMemoryStorage(withPeers(1, 2, 3)));
         r.becomeCandidate();
@@ -105,16 +105,16 @@ class RaftPaperTest {
 
     // Section 5.2: testNonleaderStartElection
     @Test
-    void testFollowerStartElection() {
+    void testFollowerStartElection() throws RaftException {
         testNonleaderStartElection(RaftStateType.StateFollower);
     }
 
     @Test
-    void testCandidateStartNewElection() {
+    void testCandidateStartNewElection() throws RaftException {
         testNonleaderStartElection(RaftStateType.StateCandidate);
     }
 
-    private void testNonleaderStartElection(RaftStateType state) {
+    private void testNonleaderStartElection(RaftStateType state) throws RaftException {
         int et = 10;
         Raft r = newTestRaft(1, et, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         switch (state) {
@@ -142,7 +142,7 @@ class RaftPaperTest {
 
     // Section 5.2: TestLeaderElectionInOneRoundRPC
     @Test
-    void testLeaderElectionInOneRoundRPC() {
+    void testLeaderElectionInOneRoundRPC() throws RaftException {
         record TC(int size, Map<Long, Boolean> votes, RaftStateType state) {}
         List<TC> tests = List.of(
                 new TC(1, Map.of(), RaftStateType.StateLeader),
@@ -183,7 +183,7 @@ class RaftPaperTest {
 
     // Section 5.2: TestFollowerVote
     @Test
-    void testFollowerVote() {
+    void testFollowerVote() throws RaftException {
         record TC(long vote, long nvote, boolean wreject) {}
         List<TC> tests = List.of(
                 new TC(Util.NONE, 2, false),
@@ -212,7 +212,7 @@ class RaftPaperTest {
 
     // Section 5.2: TestCandidateFallback
     @Test
-    void testCandidateFallback() {
+    void testCandidateFallback() throws RaftException {
         List<Eraftpb.Message> tests = List.of(
                 Eraftpb.Message.newBuilder().setFrom(2).setTo(1).setTerm(1)
                         .setMsgType(Eraftpb.MessageType.MsgAppend).build(),
@@ -236,7 +236,7 @@ class RaftPaperTest {
 
     // Section 5.3: TestLeaderStartReplication
     @Test
-    void testLeaderStartReplication() {
+    void testLeaderStartReplication() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1, 2, 3));
         Raft r = newTestRaft(1, 10, 1, s);
         r.becomeCandidate();
@@ -264,7 +264,7 @@ class RaftPaperTest {
 
     // Section 5.3: TestLeaderCommitEntry
     @Test
-    void testLeaderCommitEntry() {
+    void testLeaderCommitEntry() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1, 2, 3));
         Raft r = newTestRaft(1, 10, 1, s);
         r.becomeCandidate();
@@ -289,7 +289,7 @@ class RaftPaperTest {
 
     // Section 5.3: TestLeaderAcknowledgeCommit
     @Test
-    void testLeaderAcknowledgeCommit() {
+    void testLeaderAcknowledgeCommit() throws RaftException {
         record TC(int size, Set<Long> acceptors, boolean wack) {}
         List<TC> tests = List.of(
                 new TC(1, Set.of(), true),
@@ -329,7 +329,7 @@ class RaftPaperTest {
 
     // Section 5.3: TestFollowerCommitEntry
     @Test
-    void testFollowerCommitEntry() {
+    void testFollowerCommitEntry() throws RaftException {
         record TC(List<Eraftpb.Entry> ents, long commit) {}
         List<TC> tests = List.of(
                 new TC(List.of(Eraftpb.Entry.newBuilder().setTerm(1).setIndex(1)
@@ -362,7 +362,7 @@ class RaftPaperTest {
 
     // Section 5.3: TestFollowerCheckMsgApp
     @Test
-    void testFollowerCheckMsgApp() {
+    void testFollowerCheckMsgApp() throws RaftException {
         List<Eraftpb.Entry> ents = List.of(
                 Eraftpb.Entry.newBuilder().setTerm(1).setIndex(1).build(),
                 Eraftpb.Entry.newBuilder().setTerm(2).setIndex(2).build()
@@ -403,7 +403,7 @@ class RaftPaperTest {
 
     // Section 5.4.1: TestVoter
     @Test
-    void testVoter() {
+    void testVoter() throws RaftException {
         record TC(List<Eraftpb.Entry> ents, long logterm, long index, boolean wreject) {}
         List<TC> tests = List.of(
                 new TC(index(1).terms(1), 1, 1, false),
@@ -438,7 +438,7 @@ class RaftPaperTest {
 
     // Section 5.4.2: TestLeaderOnlyCommitsLogFromCurrentTerm
     @Test
-    void testLeaderOnlyCommitsLogFromCurrentTerm() {
+    void testLeaderOnlyCommitsLogFromCurrentTerm() throws RaftException {
         List<Eraftpb.Entry> ents = List.of(
                 Eraftpb.Entry.newBuilder().setTerm(1).setIndex(1).build(),
                 Eraftpb.Entry.newBuilder().setTerm(2).setIndex(2).build()
@@ -476,16 +476,16 @@ class RaftPaperTest {
 
     // Section 5.2: TestFollowerElectionTimeoutRandomized
     @Test
-    void testFollowerElectionTimeoutRandomized() {
+    void testFollowerElectionTimeoutRandomized() throws RaftException {
         testNonleaderElectionTimeoutRandomized(RaftStateType.StateFollower);
     }
 
     @Test
-    void testCandidateElectionTimeoutRandomized() {
+    void testCandidateElectionTimeoutRandomized() throws RaftException {
         testNonleaderElectionTimeoutRandomized(RaftStateType.StateCandidate);
     }
 
-    private void testNonleaderElectionTimeoutRandomized(RaftStateType state) {
+    private void testNonleaderElectionTimeoutRandomized(RaftStateType state) throws RaftException {
         int et = 10;
         Raft r = newTestRaft(1, et, 1, newTestMemoryStorage(withPeers(1, 2, 3)));
         Set<Integer> timeouts = new HashSet<>();
@@ -510,16 +510,16 @@ class RaftPaperTest {
 
     // Section 5.2: TestFollowersElectionTimeoutNonconflict
     @Test
-    void testFollowersElectionTimeoutNonconflict() {
+    void testFollowersElectionTimeoutNonconflict() throws RaftException {
         testNonleadersElectionTimeoutNonconflict(RaftStateType.StateFollower);
     }
 
     @Test
-    void testCandidatesElectionTimeoutNonconflict() {
+    void testCandidatesElectionTimeoutNonconflict() throws RaftException {
         testNonleadersElectionTimeoutNonconflict(RaftStateType.StateCandidate);
     }
 
-    private void testNonleadersElectionTimeoutNonconflict(RaftStateType state) {
+    private void testNonleadersElectionTimeoutNonconflict(RaftStateType state) throws RaftException {
         int et = 10;
         int size = 5;
         long[] ids = idsBySize(size);
@@ -555,7 +555,7 @@ class RaftPaperTest {
 
     // Section 5.3: TestLeaderCommitPrecedingEntries
     @Test
-    void testLeaderCommitPrecedingEntries() {
+    void testLeaderCommitPrecedingEntries() throws RaftException {
         List<List<Eraftpb.Entry>> tests = List.of(
                 List.of(),
                 List.of(Eraftpb.Entry.newBuilder().setTerm(2).setIndex(1).build()),
@@ -591,7 +591,7 @@ class RaftPaperTest {
 
     // Section 5.3: TestFollowerAppendEntries
     @Test
-    void testFollowerAppendEntries() {
+    void testFollowerAppendEntries() throws RaftException {
         record TC(long index, long term, List<Eraftpb.Entry> ents, List<Eraftpb.Entry> wents, List<Eraftpb.Entry> wunstable) {}
         List<TC> tests = List.of(
                 new TC(2, 2,
@@ -634,7 +634,7 @@ class RaftPaperTest {
 
     // Section 5.3: TestLeaderSyncFollowerLog
     @Test
-    void testLeaderSyncFollowerLog() {
+    void testLeaderSyncFollowerLog() throws RaftException {
         List<Eraftpb.Entry> ents = index(0).terms(0, 1, 1, 1, 4, 4, 5, 5, 6, 6, 6);
         long term = 8;
 
@@ -681,7 +681,7 @@ class RaftPaperTest {
 
     // Section 5.4.1: TestVoteRequest
     @Test
-    void testVoteRequest() {
+    void testVoteRequest() throws RaftException {
         record TC(List<Eraftpb.Entry> ents, long wterm) {}
         List<TC> tests = List.of(
                 new TC(index(1).terms(1), 2),
@@ -728,7 +728,7 @@ class RaftPaperTest {
         return ids;
     }
 
-    static void commitNoopEntry(Raft r, MemoryStorage s) {
+    static void commitNoopEntry(Raft r, MemoryStorage s) throws RaftException {
         if (r.state != RaftStateType.StateLeader) {
             throw new IllegalStateException("it should only be used when it is the leader");
         }
