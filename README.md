@@ -13,13 +13,14 @@ split into a pure-protocol core and pluggable Transport / Storage
 implementations. The core has zero I/O and zero network dependencies;
 production-grade gRPC and RocksDB modules ship alongside.
 
-> ⚠️ **Alpha — `0.1.0-alpha`.** Protocol behaviour matches etcd-raft
-> 1:1; the public API was hardened in the run-up to `0.1.0` (immutable
-> `Status` / `Ready` records, `Config.Builder`, JSpecify nullability,
-> internal `Raft` fields locked to package-private). Production-scale
-> mileage and a Maven Central release are still ahead — see
+> ⚠️ **Release candidate — `0.1.0-RC1`.** Protocol behaviour matches
+> etcd-raft 1:1; the public API has been hardened (immutable `Status` /
+> `Ready` records, `Config.Builder`, JSpecify nullability, internal
+> `Raft` fields locked to package-private). RC means: published to
+> Maven Central, API-stable for the `0.1.0` line, but production
+> mileage / external benchmarks are still ahead of `1.0` — see
 > [`raft-core/TODO.md`](raft-core/TODO.md). Pin to an exact version
-> until 1.0.
+> until `1.0`.
 
 ## Modules
 
@@ -61,17 +62,17 @@ Add the dependencies (replace the version with the latest tag):
 <dependency>
   <groupId>io.github.x-infra-lab</groupId>
   <artifactId>raft-core</artifactId>
-  <version>0.1.0-alpha</version>
+  <version>0.1.0-RC1</version>
 </dependency>
 <dependency>
   <groupId>io.github.x-infra-lab</groupId>
   <artifactId>raft-transport-grpc</artifactId>
-  <version>0.1.0-alpha</version>
+  <version>0.1.0-RC1</version>
 </dependency>
 <dependency>
   <groupId>io.github.x-infra-lab</groupId>
   <artifactId>raft-storage-rocksdb</artifactId>
-  <version>0.1.0-alpha</version>
+  <version>0.1.0-RC1</version>
 </dependency>
 ```
 

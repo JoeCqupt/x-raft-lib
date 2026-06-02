@@ -1,10 +1,10 @@
 # x-raft-lib / raft-core
 
-> ⚠️ **当前为 alpha 版本（0.1.0-alpha），尚未经过生产验证。** 协议正确性已对齐
-> etcd/raft，配套能力（可插拔 metrics、错误分级、gRPC 传输
+> ⚠️ **当前为 Release Candidate（0.1.0-RC1），尚未经过生产验证。** 协议正确性
+> 已对齐 etcd/raft，配套能力（可插拔 metrics、错误分级、gRPC 传输
 > [raft-transport-grpc](../raft-transport-grpc)、RocksDB 存储
-> [raft-storage-rocksdb](../raft-storage-rocksdb)）均已就绪。1.0 之前的剩余事项
-> 见 [`TODO.md`](./TODO.md) 路线图。
+> [raft-storage-rocksdb](../raft-storage-rocksdb)）均已就绪。`1.0` 之前的剩余
+> 事项见 [`TODO.md`](./TODO.md) 路线图。
 
 [English](README.md) | 中文
 

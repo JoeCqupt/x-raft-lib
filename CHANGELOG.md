@@ -118,7 +118,7 @@ once it reaches `1.0.0`. Pre-`1.0` releases may break compatibility.
   `int` to `long` so a long-lived learner that never gets promoted
   can't overflow the counter (~248 days at 100 Hz tick).
 - Maven coordinates: `io.github.xinfra.lab:raft:1.0-SNAPSHOT` →
-  `io.github.xinfra.lab:raft-core:0.1.0-alpha`.
+  `io.github.xinfra.lab:raft-core:0.1.0-RC1`.
 - `Raft.java`: `MsgAppendResponse` handler unconditionally clears
   `pr.msgAppFlowPaused` (mirrors etcd-raft); `maybeSendAppend` falls
   back to snapshot when `entries()` raises (silent swallow fixed).
@@ -156,6 +156,6 @@ once it reaches `1.0.0`. Pre-`1.0` releases may break compatibility.
   worsens convergence in the fresh-peer-with-compacted-leader case
   and breaks the snapshot_install_after_compact test scenario.
 
-## [0.1.0-alpha] - TBD
+## [0.1.0-RC1] - TBD
 
 First public alpha. Protocol parity with etcd-io/raft.

@@ -4,7 +4,7 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.1.0-alpha (current) | Best-effort only |
+| 0.1.0-RC1 (current) | Best-effort only |
 | < 0.1.0 | Not supported |
 
 This project is alpha; **do not run it in production**. Once we cut a
