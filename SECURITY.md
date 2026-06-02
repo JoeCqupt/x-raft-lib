@@ -4,11 +4,12 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.1.0-RC1 (current) | Best-effort only |
-| < 0.1.0 | Not supported |
+| `0.1.0-RC1` (latest release) | Best-effort only |
+| `0.1.0-SNAPSHOT` (`main`) | Best-effort only |
+| `< 0.1.0` | Not supported |
 
-This project is alpha; **do not run it in production**. Once we cut a
-stable line, this section will list supported branches.
+This project is pre-`1.0`; **do not run it in production**. Once we
+cut a stable line, this section will list supported branches.
 
 ## Reporting a vulnerability
 

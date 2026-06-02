@@ -58,6 +58,14 @@ the *why*. Mirror that style.
 - New consensus protocols or non-Raft variants.
 - Performance optimisations without a benchmark.
 
+## Maintainers and releases
+
+Current maintainers, their areas, and how to become one are listed in
+[`MAINTAINERS.md`](./MAINTAINERS.md). The exact recipe for cutting a
+release (version bump, dry-run, Maven Central publish, GitHub Release)
+lives in [`RELEASING.md`](./RELEASING.md) — a contributor doesn't need
+to read it day-to-day, but a new maintainer should.
+
 ## Code of Conduct
 
 By participating you agree to abide by the [Code of Conduct](./CODE_OF_CONDUCT.md).

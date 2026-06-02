@@ -1,11 +1,12 @@
 # x-raft-lib / raft-core
 
-> ⚠️ **Release candidate (`0.1.0-RC1`) — not yet production-validated.**
-> Protocol correctness is on par with etcd-raft, and the surrounding
-> pieces are in place: pluggable metrics, error categorisation, a gRPC
-> transport ([raft-transport-grpc](../raft-transport-grpc)) and a RocksDB
-> Storage ([raft-storage-rocksdb](../raft-storage-rocksdb)). Remaining
-> gaps before `1.0` are tracked in [`TODO.md`](./TODO.md).
+> ⚠️ **Latest release: `0.1.0-RC1`** on Maven Central; **`main` is
+> `0.1.0-SNAPSHOT`** (unreleased work toward `0.1.0` GA). Protocol
+> correctness is on par with etcd-raft, and the surrounding pieces are
+> in place: pluggable metrics, error categorisation, a gRPC transport
+> ([raft-transport-grpc](../raft-transport-grpc)) and a RocksDB Storage
+> ([raft-storage-rocksdb](../raft-storage-rocksdb)). Remaining gaps
+> before `1.0` are tracked in [`TODO.md`](./TODO.md).
 
 English | [中文](README.zh.md)
 

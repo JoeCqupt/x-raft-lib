@@ -1,5 +1,6 @@
 # x-raft-lib
 
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.x-infra-lab/raft-core?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.x-infra-lab/raft-core)
 [![CI](https://github.com/x-infra-lab/x-raft-lib/actions/workflows/ci.yml/badge.svg)](https://github.com/x-infra-lab/x-raft-lib/actions/workflows/ci.yml)
 [![Chaos / Soak](https://github.com/x-infra-lab/x-raft-lib/actions/workflows/chaos-soak-weekly.yml/badge.svg)](https://github.com/x-infra-lab/x-raft-lib/actions/workflows/chaos-soak-weekly.yml)
 [![Fuzz](https://github.com/x-infra-lab/x-raft-lib/actions/workflows/fuzz-nightly.yml/badge.svg)](https://github.com/x-infra-lab/x-raft-lib/actions/workflows/fuzz-nightly.yml)
@@ -13,12 +14,13 @@ split into a pure-protocol core and pluggable Transport / Storage
 implementations. The core has zero I/O and zero network dependencies;
 production-grade gRPC and RocksDB modules ship alongside.
 
-> ⚠️ **Release candidate — `0.1.0-RC1`.** Protocol behaviour matches
-> etcd-raft 1:1; the public API has been hardened (immutable `Status` /
-> `Ready` records, `Config.Builder`, JSpecify nullability, internal
-> `Raft` fields locked to package-private). RC means: published to
-> Maven Central, API-stable for the `0.1.0` line, but production
-> mileage / external benchmarks are still ahead of `1.0` — see
+> ⚠️ **Latest release: `0.1.0-RC1`** (on Maven Central). **`main` is
+> `0.1.0-SNAPSHOT`** — unreleased work toward `0.1.0` GA. Protocol
+> behaviour matches etcd-raft 1:1; the public API has been hardened
+> (immutable `Status` / `Ready` records, `Config.Builder`, JSpecify
+> nullability, internal `Raft` fields locked to package-private). RC
+> means the `0.1.0` API surface is frozen, but production mileage /
+> external benchmarks are still ahead of `1.0` — see
 > [`raft-core/TODO.md`](raft-core/TODO.md). Pin to an exact version
 > until `1.0`.
 
@@ -289,6 +291,8 @@ done / in-progress / outstanding items before `1.0`.
 ## Contributing & security
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+Maintainer list and how to become one: [MAINTAINERS.md](MAINTAINERS.md).
+How releases are cut: [RELEASING.md](RELEASING.md).
 Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
