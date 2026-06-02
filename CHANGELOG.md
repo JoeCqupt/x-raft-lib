@@ -8,6 +8,12 @@ once it reaches `1.0.0`. Pre-`1.0` releases may break compatibility.
 
 ## [Unreleased]
 
+## [0.1.0-RC1] - 2026-06-02
+
+First public release. Protocol parity with etcd-io/raft, plus the
+out-of-band snapshot streaming, bounded queues, pluggable metrics,
+gRPC transport, and RocksDB storage referenced below.
+
 ### Changed
 - **Extracted to a standalone repository** — the Raft modules were lifted
   out of the original monorepo into a dedicated repo at
@@ -155,7 +161,3 @@ once it reaches `1.0.0`. Pre-`1.0` releases may break compatibility.
   of moving to etcd-raft's `lastIndex + 1`. Verified the +1 form
   worsens convergence in the fresh-peer-with-compacted-leader case
   and breaks the snapshot_install_after_compact test scenario.
-
-## [0.1.0-RC1] - TBD
-
-First public alpha. Protocol parity with etcd-io/raft.
