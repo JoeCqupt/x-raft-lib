@@ -6,7 +6,6 @@
  */
 package io.github.xinfra.lab.raft.transport.grpc;
 
-import com.google.protobuf.ByteString;
 import io.github.xinfra.lab.raft.Transport;
 import io.github.xinfra.lab.raft.proto.Eraftpb;
 import org.junit.jupiter.api.Test;
