@@ -1,18 +1,33 @@
 name: fuzz-nightly
 
 # Long-running Jazzer fuzz pass for the protobuf parse boundary and the
-# raft step() entry point. Daily so a regression on a hand-crafted peer
-# message surfaces within 24h instead of waiting for someone to run it
-# manually.
+# raft step() entry point. Twice daily so a regression on a hand-crafted
+# peer message surfaces within ~12h instead of waiting for the next
+# weekly chaos-soak window — and the second slot recovers from GitHub's
+# documented "schedule may be skipped during high load" behaviour, which
+# was visibly affecting this workflow (only 2 of the first 5 nights
+# fired before we noticed).
 #
 # Each harness gets a fixed budget; corpus findings (if any) are uploaded
 # as artifacts so the failing input can be replayed locally with:
 #   mvn -P fuzz -pl raft-core test -Dtest=<HarnessName>#<method>
+#
+# Manual trigger via workflow_dispatch lets a maintainer kick a focused
+# fuzz session after landing a fix without waiting for the next slot.
 
 on:
   schedule:
-    - cron: '23 7 * * *'   # ~07:23 UTC daily (off the :00 hour to avoid GH rate spike)
+    # Two slots, ~12h apart. Both off the :00 / :30 marks per GitHub's
+    # advice on cron rate spikes. If one is delayed/skipped by Actions
+    # load, the other catches it.
+    - cron: '23 7 * * *'    # ~07:23 UTC
+    - cron: '47 19 * * *'   # ~19:47 UTC
   workflow_dispatch:
+    inputs:
+      duration_seconds:
+        description: 'Per-harness fuzz duration (seconds). Default 1800 = 30 min.'
+        required: false
+        default: '1800'
 
 concurrency:
   group: fuzz-nightly
@@ -21,7 +36,9 @@ concurrency:
 jobs:
   fuzz:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # 30 min per harness × buffer for build / upload. Each matrix leg
+    # runs independently so the budget is per-harness, not aggregate.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -46,10 +63,11 @@ jobs:
 
       - name: Fuzz ${{ matrix.harness }}
         env:
-          # Time budget per harness, in seconds. 10 min is enough to
-          # surface obvious regressions without blowing past the
-          # workflow's 45-min timeout under matrix execution.
-          JAZZER_FUZZ_DURATION_SECONDS: '600'
+          # 30 min on schedule (vs the previous 10) — the harness needs
+          # enough budget to actually drift past the easy findings into
+          # the deeper paths. workflow_dispatch lets the operator
+          # override for a longer / shorter manual session.
+          JAZZER_FUZZ_DURATION_SECONDS: ${{ github.event.inputs.duration_seconds || '1800' }}
         run: |
           mvn -B -ntp -P fuzz -pl raft-core test \
               -Dtest='${{ matrix.harness }}' \
@@ -59,9 +77,10 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: fuzz-corpus-${{ matrix.harness }}
+          name: fuzz-corpus-${{ matrix.harness }}-${{ github.run_id }}
           path: |
             raft-core/.cifuzz-corpus/
+            raft-core/src/test/resources/io/github/xinfra/lab/raft/fuzz/
             raft-core/target/surefire-reports/
           retention-days: 30
           if-no-files-found: ignore

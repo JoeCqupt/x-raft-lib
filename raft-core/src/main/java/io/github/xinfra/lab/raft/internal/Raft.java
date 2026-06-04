@@ -798,6 +798,18 @@ public class Raft {
             case MsgStorageApplyResp:
                 if (m.getEntriesCount() > 0) {
                     long index = m.getEntries(m.getEntriesCount() - 1).getIndex();
+                    // The apply response must report indices we previously
+                    // asked the apply thread to apply — i.e. inside
+                    // [applied, committed]. A fuzzer (or a malfunctioning
+                    // apply thread) can deliver an arbitrary index that
+                    // would trip RaftLog.appliedTo's invariant. Drop the
+                    // out-of-range response silently. Surfaced by
+                    // RaftStepFuzzTest.
+                    if (index > raftLog.committed || index < raftLog.applied) {
+                        logger.info("{:x} ignored MsgStorageApplyResp with out-of-range index {} [applied={}, committed={}]",
+                                id, index, raftLog.applied, raftLog.committed);
+                        break;
+                    }
                     appliedTo(index, Util.entsSize(m.getEntriesList()));
                     reduceUncommittedSize(Util.payloadsSize(m.getEntriesList()));
                 }
@@ -1232,7 +1244,17 @@ public class Raft {
             logger.info("{:x} ignored MsgHeartbeat from self", id);
             return;
         }
-        raftLog.commitTo(m.getCommit());
+        // The leader's commit pointer is meaningful only up to entries we
+        // actually have. A legitimate leader sends commit = min(leader.commit,
+        // follower.match) so commit > our lastIndex shouldn't happen — but a
+        // fuzzer / hostile peer can craft a heartbeat with arbitrary commit
+        // that would trip RaftLog.commitTo's "tocommit out of range" invariant.
+        // Clamp at lastIndex; the legitimate case (commit ≤ lastIndex) is
+        // unchanged, and the malformed case becomes a no-op (commitTo only
+        // advances). Matches the implicit clamp inside maybeAppend()'s own
+        // commitTo call, so the heartbeat path is now as defensive as the
+        // append path. Surfaced by RaftStepFuzzTest.
+        raftLog.commitTo(Math.min(m.getCommit(), raftLog.lastIndex()));
         send(Eraftpb.Message.newBuilder()
                 .setTo(m.getFrom())
                 .setMsgType(Eraftpb.MessageType.MsgHeartbeatResponse)

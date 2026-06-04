@@ -651,6 +651,64 @@ class CoverageGapsTest {
     // step entry — broader from-self filtering breaks legitimate paths
     // like single-node msgsAfterAppend self-loops.
     @Test
+    void stepDropsMsgStorageApplyRespWithOutOfRangeIndex() throws RaftException {
+        // Sibling fuzz finding to handleHeartbeat's clamp: a fuzz
+        // MsgStorageApplyResp with bogus entry indices used to trip
+        // RaftLog.appliedTo's "applied out of range" invariant. Apply
+        // responses are local messages so a real cluster never has
+        // bogus indices here, but the fuzzer can synth them by guessing
+        // a from value that satisfies isLocalMsgTarget. Drop silently.
+        MemoryStorage s = newTestMemoryStorage(withPeers(1, 2, 3));
+        Config cfg = newTestConfig(1, 10, 1, s);
+        Raft r = Raft.newRaft(cfg);
+        long appliedBefore = r.raftLog().applied;
+
+        r.step(Eraftpb.Message.newBuilder()
+                .setMsgType(Eraftpb.MessageType.MsgStorageApplyResp)
+                .setFrom(Util.LOCAL_APPLY_THREAD)
+                .setTo(1)
+                .addEntries(Eraftpb.Entry.newBuilder().setIndex(16776959L)) // beyond committed
+                .build());
+
+        assertThat(r.raftLog().applied)
+                .as("out-of-range MsgStorageApplyResp must not advance applied")
+                .isEqualTo(appliedBefore);
+    }
+
+    @Test
+    void handleHeartbeatClampsOutOfRangeCommit() throws RaftException {
+        // RaftStepFuzzTest finding (third class): a fuzz-crafted MsgHeartbeat
+        // with commit far exceeding our lastIndex used to trip RaftLog's
+        // "tocommit out of range" invariant. Real leaders send commit ≤
+        // follower.match ≤ follower.lastIndex, so clamping is a no-op for
+        // legitimate heartbeats — the fix matters only for malformed input.
+        MemoryStorage s = newTestMemoryStorage(withPeers(1, 2, 3));
+        Config cfg = newTestConfig(1, 10, 1, s);
+        Raft r = Raft.newRaft(cfg);
+        long lastBefore = r.raftLog().lastIndex();
+        long commitBefore = r.raftLog().committed;
+
+        // Heartbeat from a non-self peer with bogus commit far past our log.
+        r.step(Eraftpb.Message.newBuilder()
+                .setMsgType(Eraftpb.MessageType.MsgHeartbeat)
+                .setFrom(2)
+                .setTo(1)
+                .setTerm(1)
+                .setCommit(14337)   // the actual fuzz value
+                .build());
+
+        // No invariant trip; commit not advanced past lastIndex.
+        assertThat(r.raftLog().committed)
+                .as("commit must not advance past lastIndex on bogus heartbeat")
+                .isLessThanOrEqualTo(lastBefore)
+                .isGreaterThanOrEqualTo(commitBefore);
+        // A response is still sent — clamping is silent, the leader gets
+        // its heartbeat ack as normal so the cluster stays liveness-stable.
+        assertThat(r.msgs().size() + r.msgsAfterAppend().size())
+                .as("clamped heartbeat must still produce a response").isPositive();
+    }
+
+    @Test
     void handleHeartbeatDropsHeartbeatFromSelf() throws RaftException {
         MemoryStorage s = newTestMemoryStorage(withPeers(1, 2, 3));
         Config cfg = newTestConfig(1, 10, 1, s);
