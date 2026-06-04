@@ -78,6 +78,40 @@ public interface RaftMetrics {
     /** Snapshot install transitioned phases on the local follower. */
     default void onSnapshotInstall(SnapshotPhase phase) {}
 
+    /**
+     * Why an inbound message was rejected at {@code Raft.step}'s trust
+     * boundary without affecting raft state.
+     */
+    enum MalformedMessageReason {
+        /**
+         * A {@link RaftInvariantException} fired anywhere in step's call
+         * tree. Most fuzz / hostile-peer crashes hit this category — the
+         * receiver detected an internal invariant violation driven by the
+         * incoming message (or its handler-side echo).
+         */
+        INVARIANT_VIOLATION,
+        /**
+         * Some other {@link RuntimeException} (NPE, IndexOutOfBounds,
+         * arithmetic overflow, ...) escaped a handler. Less expected than
+         * {@code INVARIANT_VIOLATION}; the matching log line includes the
+         * stack trace so a real bug can be triaged. Production hosts
+         * should alert on a non-zero rate of this counter.
+         */
+        UNEXPECTED_EXCEPTION
+    }
+
+    /**
+     * An inbound message was dropped at {@code Raft.step}'s trust boundary.
+     * The local raft state is unaffected; the cluster sees this peer as
+     * silent for that one message. Production deployments should expose
+     * this as a counter labelled by {@code msgType} and {@code reason},
+     * and alert on sustained non-zero rate.
+     *
+     * @param msgType the {@code MessageType.toString()} of the dropped msg
+     * @param reason  why the drop fired (see {@link MalformedMessageReason})
+     */
+    default void onMalformedMessageDropped(String msgType, MalformedMessageReason reason) {}
+
     // ---- gauges (host should poll these via Status / direct reads) ----
 
     /** Hint that the host should sample gauges now (called once per Ready cycle). */

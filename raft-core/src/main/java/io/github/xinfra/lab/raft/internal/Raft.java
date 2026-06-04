@@ -703,7 +703,61 @@ public class Raft {
     }
 
     // ============= Step =============
+    /**
+     * Trust boundary for inbound messages. Real raft peers can deliver
+     * any message type with any field values — a hostile or buggy peer,
+     * or fuzz-corrupted wire bytes, can drive an internal invariant to
+     * trip ({@link RaftInvariantException}) or hit an unguarded code
+     * path that throws an unrelated {@link RuntimeException}. Letting
+     * those propagate would crash the event loop on every malformed
+     * input, turning a single bad peer into a cluster-wide DoS.
+     *
+     * <p>Policy: an inbound message can fail this raft's processing
+     * only via the declared {@link RaftException} channel (which the
+     * caller is expected to handle). Anything else thrown out of the
+     * dispatch tree is caught here, logged, counted via
+     * {@link RaftMetrics#onMalformedMessageDropped}, and the message is
+     * silently dropped — the cluster sees this peer as silent for that
+     * one message.
+     *
+     * <p>This is the production-grade complement to the targeted
+     * input-validation guards higher in this file (term=0 vote-family,
+     * MsgHeartbeat self-spoof, commit clamp, applyresp validate). Those
+     * give better log messages for known patterns; this catch is the
+     * safety net for everything else, including new fuzz findings that
+     * land before a targeted guard does.
+     *
+     * <p>Internal-state-corruption bugs that aren't message-driven
+     * (e.g. invariant trips inside {@link #becomeLeader},
+     * {@link #applyConfChange}, {@code Raft.tickFn} on internal state)
+     * keep crashing — those callers don't go through {@code step()}.
+     */
     public void step(Eraftpb.Message m) throws RaftException {
+        try {
+            stepInternal(m);
+        } catch (RaftInvariantException invariant) {
+            // Known pattern: input drove an invariant trip somewhere in the
+            // dispatch tree. INFO-level on the raft logger (visible but not
+            // alarming); WARN-level message in the metric backend if the host
+            // wires it up.
+            logger.info("{:x} dropped {} from {:x}: invariant violated: {}",
+                    id, m.getMsgType(), m.getFrom(), invariant.getMessage());
+            metrics.onMalformedMessageDropped(m.getMsgType().toString(),
+                    RaftMetrics.MalformedMessageReason.INVARIANT_VIOLATION);
+        } catch (RuntimeException unexpected) {
+            // Less expected: NPE, IndexOutOfBounds, arithmetic overflow,
+            // ClassCast, ... a path we didn't guard. ERROR-level with
+            // stack trace so a real bug is visible in logs and triageable;
+            // a sustained non-zero rate of this counter is a "look at the
+            // logs" alert for the operator.
+            logger.error("{:x} dropped {} from {:x}: unexpected exception",
+                    id, m.getMsgType(), m.getFrom(), unexpected);
+            metrics.onMalformedMessageDropped(m.getMsgType().toString(),
+                    RaftMetrics.MalformedMessageReason.UNEXPECTED_EXCEPTION);
+        }
+    }
+
+    private void stepInternal(Eraftpb.Message m) throws RaftException {
         StateTrace.traceReceiveMessage(this, m);
 
         // Handle the message term
