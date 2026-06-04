@@ -73,20 +73,27 @@ jobs:
         shell: bash
         run: mvn -B -ntp install -Djacoco.skip=true -pl '!raft-storage-rocksdb,!raft-tests,!raft-examples'
 
-      - name: Upload JaCoCo HTML report (raft-core)
+      - name: Upload JaCoCo HTML reports
         if: always() && matrix.os == 'ubuntu-latest' && matrix.jdk == '17'
         uses: actions/upload-artifact@v4
         with:
-          name: jacoco-raft-core
-          path: raft-core/target/site/jacoco/
+          name: jacoco-reports
+          path: |
+            raft-core/target/site/jacoco/
+            raft-transport-grpc/target/site/jacoco/
+            raft-storage-rocksdb/target/site/jacoco/
+            raft-tests/target/site/jacoco-aggregate/
           retention-days: 14
           if-no-files-found: ignore
 
       # Single source of coverage truth for downstream tooling (badges, PR
-      # comment, sunburst). Aggregates jacoco.xml from every module that
-      # produces one — raft-core / raft-transport-grpc / raft-storage-rocksdb
-      # — so the Codecov view reflects the full reactor, not just one module.
-      # Scoped to the same ubuntu/JDK17 leg as the local jacoco gate so we
+      # comment, sunburst). The aggregate report from raft-tests merges every
+      # module's exec file so cross-module credit (e.g. raft-tests'
+      # integration suite exercising raft-transport-grpc / raft-storage-rocksdb)
+      # is included; the per-module XMLs are still uploaded so Codecov can
+      # break out per-component sub-coverage views.
+      #
+      # Scoped to the ubuntu/JDK17 leg (the only one that runs jacoco) so we
       # don't double-publish from each matrix cell.
       #
       # `token` is supplied via repo secret; for public repos Codecov accepts
@@ -98,6 +105,7 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: >-
+            raft-tests/target/site/jacoco-aggregate/jacoco.xml,
             raft-core/target/site/jacoco/jacoco.xml,
             raft-transport-grpc/target/site/jacoco/jacoco.xml,
             raft-storage-rocksdb/target/site/jacoco/jacoco.xml

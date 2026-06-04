@@ -106,6 +106,43 @@
                     <excludedGroups>soak</excludedGroups>
                 </configuration>
             </plugin>
+            <!-- raft-tests is the natural aggregation point for cross-module
+                 coverage: it depends on every published module, and its
+                 integration suite (real gRPC sockets, real RocksDB stores)
+                 is what actually exercises the transport / storage classes
+                 end-to-end. The per-module JaCoCo report misses that
+                 credit entirely — e.g. raft-transport-grpc shows ~55% from
+                 its 5 unit tests, while raft-tests' 27 integration tests
+                 push the realised coverage well past 80%.
+                 The {@code report-aggregate} goal reads each declared
+                 dependency module's {@code target/jacoco.exec} and emits
+                 a combined HTML + XML + CSV under
+                 {@code target/site/jacoco-aggregate/}. That XML is what
+                 the CI workflow uploads to Codecov as the primary
+                 cross-cutting view; the per-module reports remain as the
+                 binding regression-floor gate. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>report-aggregate</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report-aggregate</goal>
+                        </goals>
+                        <configuration>
+                            <!-- Hide raft-tests' own classes (test scaffolding
+                                 only — chaos / linearizability harness) so the
+                                 aggregate reflects library-surface coverage. -->
+                            <excludes>
+                                <exclude>io/github/xinfra/lab/raft/tests/**</exclude>
+                                <exclude>**/proto/**</exclude>
+                            </excludes>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 
