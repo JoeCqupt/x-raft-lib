@@ -5,55 +5,79 @@
 ## The binding coverage check is the per-module JaCoCo gate in each module's
 ## pom.xml ({@code mvn install} fails if coverage drops below the floor); this
 ## file controls the cross-module Codecov view used for the README badge and
-## the PR comment / status checks. Keep its targets at-or-below the per-module
-## floors so the Codecov status doesn't disagree with the local gate.
+## the PR comment / status checks. CI uploads four reports — the aggregate
+## XML from raft-tests (with cross-module integration credit) takes precedence,
+## the three per-module XMLs follow for the per-component breakdown.
+##
+## Current per-module gates (kept in each pom.xml):
+##   raft-core              85 / 80 / 88 / 85   (inst / br / line / meth)
+##   raft-storage-rocksdb   80 / 70 / 80 / 95
+##   raft-transport-grpc    75 / 60 / 75 / 80
+##
+## Set the Codecov project floor to the minimum of those instruction floors
+## minus a small drift buffer, so a single weak module can't drag the global
+## badge red without also breaking its own local gate first.
 
 codecov:
   # Wait for at least one upload before publishing a status. With a single
   # ubuntu/JDK17 upload per CI run, this is effectively a no-op safeguard
   # against the matrix-leg race where Codecov could publish a partial view.
+  # The number is 1 because per-module + aggregate all come from one job.
   notify:
     after_n_builds: 1
     wait_for_ci: true
   require_ci_to_pass: true
 
 # Tolerate the occasional jacoco.xml glitch (e.g. a module test failure that
-# kills its report) without taking the badge red.
+# kills its report) without taking the badge red. Range governs the badge
+# colour gradient.
 coverage:
   precision: 1
   round: down
-  range: "70...90"
+  range: "75...90"
   status:
     project:
       default:
-        # Floor: project-wide coverage must not drop below 75%. The repo-wide
-        # average is held up by raft-core's 85%+ instruction gate; the lower
-        # floor here gives the transport / storage modules room without
-        # making their drift invisible.
-        target: 75%
+        # Floor: project-wide coverage must not drop below 80%. Realised
+        # aggregate sits at ~82% inst as of the last refresh; 2pp buffer.
+        # The weakest per-module floor (raft-transport-grpc at 75%) sets
+        # the lower bound — Codecov shouldn't be tighter than the binding
+        # local gate.
+        target: 80%
         threshold: 1%   # tolerate a 1pp dip per PR before marking red
         if_ci_failed: error
     patch:
       default:
-        # New code in a PR must hit 70% — generous enough that adding a
-        # single defensive try/catch doesn't turn the patch status red, but
+        # New code in a PR must hit 75% — generous enough that adding a
+        # single defensive try/catch doesn't flip the patch status red,
         # tight enough that an untested feature is visible.
-        target: 70%
+        target: 75%
         threshold: 1%
         if_ci_failed: error
 
-# Don't track coverage for generated proto sources or for tests themselves.
+# Don't track coverage for generated proto sources, test code itself, or
+# modules that aren't library surface.
+#
+# - raft-examples: demo code (KvClusterDemo etc.) — exists to show the API,
+#   not to be a release artefact. Its coverage shows up in the local
+#   jacoco-aggregate report but is excluded from the Codecov view so badge
+#   movement reflects library-quality changes only.
+# - raft-tests: cross-module integration suite — the *runner* of coverage,
+#   not the *subject*. Its own classes (chaos / linearizability harness)
+#   are scaffolding, not shipped code.
 ignore:
   - "**/proto/**"
   - "**/generated-sources/**"
   - "**/src/test/**"
-  - "raft-examples/**"  # demo code; not part of the library surface
-  - "raft-tests/**"     # cross-module integration suite; no jacoco gate yet
+  - "raft-examples/**"
+  - "raft-tests/**"
 
 # PR comment: tight, single-section table — no sunburst, no flag breakdown.
+# Only fires when coverage actually moves, so docs-only / config-only PRs
+# stay quiet.
 comment:
   layout: "header, diff, files"
   behavior: default
-  require_changes: true   # only comment when the PR actually moves coverage
+  require_changes: true
   require_base: false
   require_head: true

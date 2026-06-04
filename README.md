@@ -274,8 +274,8 @@ on Windows pending an upstream rocksdbjni native-binary fix.
 | Unit + functional + property tests | `mvn install` | must pass |
 | JaCoCo coverage on `raft-core` | per-PR CI | 85% inst / 80% branch / 88% line / 85% method |
 | JaCoCo coverage on `raft-transport-grpc` | per-PR CI | 75% inst / 60% branch / 75% line / 80% method |
-| JaCoCo coverage on `raft-storage-rocksdb` | per-PR CI | 60% inst / 45% branch / 65% line / 78% method |
-| [Codecov](https://codecov.io/gh/x-infra-lab/x-raft-lib) project + patch | per-PR CI | project ≥75% / patch ≥70% (1pp tolerance) |
+| JaCoCo coverage on `raft-storage-rocksdb` | per-PR CI | 80% inst / 70% branch / 80% line / 95% method |
+| [Codecov](https://codecov.io/gh/x-infra-lab/x-raft-lib) project + patch | per-PR CI | project ≥80% / patch ≥75% (1pp tolerance) |
 | Cross-platform smoke | per-PR CI | linux + macOS + windows × JDK 17/21 |
 | Integration suite (gRPC + RocksDB) | per-PR CI | must pass |
 | Coverage-guided fuzz on `step()` + parse | [`fuzz-nightly`](.github/workflows/fuzz-nightly.yml) | no findings |
