@@ -708,7 +708,25 @@ public class Raft {
 
         // Handle the message term
         if (m.getTerm() == 0) {
-            // local message
+            // Vote-family messages with term 0 are malformed: a real raft peer
+            // never sends MsgRequestVote / MsgRequestPreVote (or their responses)
+            // without a term. Letting them through would propagate the bad term
+            // into voteResp() at the dispatch site below, which then trips the
+            // outbound `send()` invariant ("term should be set when sending
+            // MsgRequestVote*Response"). Drop early — same policy enforced
+            // symmetrically on egress.
+            //
+            // Surfaced by the RaftStepFuzzTest harness, which constructs
+            // arbitrary inbound messages a real peer wouldn't.
+            if (m.getMsgType() == Eraftpb.MessageType.MsgRequestVote
+                    || m.getMsgType() == Eraftpb.MessageType.MsgRequestPreVote
+                    || m.getMsgType() == Eraftpb.MessageType.MsgRequestVoteResponse
+                    || m.getMsgType() == Eraftpb.MessageType.MsgRequestPreVoteResponse) {
+                logger.info("{:x} ignored {} with term=0 from {:x}", id, m.getMsgType(), m.getFrom());
+                return;
+            }
+            // Other zero-term messages are local (MsgHup, MsgPropose, MsgBeat,
+            // MsgCheckQuorum, MsgStorageAppendResp, etc.).
         } else if (m.getTerm() > term) {
             if (m.getMsgType() == Eraftpb.MessageType.MsgRequestVote || m.getMsgType() == Eraftpb.MessageType.MsgRequestPreVote) {
                 boolean force = m.getContext().toStringUtf8().equals("CampaignTransfer");
@@ -1204,6 +1222,16 @@ public class Raft {
     }
 
     void handleHeartbeat(Eraftpb.Message m) {
+        // Heartbeat with from == self is malformed — real peers don't spoof
+        // our id, but a fuzzer / hostile peer can. Echoing m.getFrom() into
+        // the response's `to` would build a self-addressed
+        // MsgHeartbeatResponse and trip the egress invariant. Drop the
+        // bogus heartbeat silently; nothing else in the handler depends on
+        // it. Surfaced by RaftStepFuzzTest.
+        if (m.getFrom() == id) {
+            logger.info("{:x} ignored MsgHeartbeat from self", id);
+            return;
+        }
         raftLog.commitTo(m.getCommit());
         send(Eraftpb.Message.newBuilder()
                 .setTo(m.getFrom())

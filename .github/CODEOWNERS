@@ -6,7 +6,6 @@
 # Release / publish infrastructure: any change here can break Maven
 # Central uploads, so it gets a separate codeowner line so the rule
 # survives even if `*` is overridden later.
-/.github/workflows/maven-publish.yml    @JoeCqupt
 /.github/workflows/release.yml          @JoeCqupt
 /pom.xml                                @JoeCqupt
 

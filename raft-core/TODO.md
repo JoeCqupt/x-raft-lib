@@ -15,8 +15,8 @@ and broader test coverage.
 - `CONTRIBUTING`, `CODE_OF_CONDUCT`, `SECURITY`, `CHANGELOG` at the repo root.
 - Sonatype-ready pom: `<licenses>`, `<developers>`, `<scm>`,
   `<issueManagement>`, and a `release` profile (sources + javadoc + GPG +
-  `central-publishing-maven-plugin`). A `workflow_dispatch` GitHub Actions
-  job (`maven-publish.yml`) runs the signed deploy.
+  `central-publishing-maven-plugin`). Tag-driven `release.yml` GitHub
+  Actions job runs the signed deploy on every `v*` tag push.
 
 ### Production hardening
 - Bounded queues for `pendingReadIndexMessages` and `readStates`

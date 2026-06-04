@@ -614,4 +614,80 @@ class CoverageGapsTest {
         assertThat(sFut.get()).isNotNull();
         assertThat(ccFut.get()).isNotNull();
     }
+
+    // ============= Malformed inbound vote messages (regression) =============
+    // RaftStepFuzzTest found two consecutive findings on chaos-soak nights:
+    // a follower stepped a synthesised MsgRequestVote / MsgRequestPreVote
+    // with term=0 and produced a vote-response with term=0, tripping the
+    // outbound `send()` invariant ("term should be set when sending ..."). A
+    // real peer never sends a vote-family message without a term, so the fix
+    // is to drop them at step entry. These four tests are the non-fuzz proof
+    // that the drop happens for every vote-family type.
+
+    @Test
+    void stepDropsMsgRequestVoteWithZeroTerm() throws RaftException {
+        assertVoteFamilyZeroTermDropped(Eraftpb.MessageType.MsgRequestVote);
+    }
+
+    @Test
+    void stepDropsMsgRequestPreVoteWithZeroTerm() throws RaftException {
+        assertVoteFamilyZeroTermDropped(Eraftpb.MessageType.MsgRequestPreVote);
+    }
+
+    @Test
+    void stepDropsMsgRequestVoteResponseWithZeroTerm() throws RaftException {
+        assertVoteFamilyZeroTermDropped(Eraftpb.MessageType.MsgRequestVoteResponse);
+    }
+
+    @Test
+    void stepDropsMsgRequestPreVoteResponseWithZeroTerm() throws RaftException {
+        assertVoteFamilyZeroTermDropped(Eraftpb.MessageType.MsgRequestPreVoteResponse);
+    }
+
+    // RaftStepFuzzTest also found a self-addressed-heartbeat finding: an
+    // inbound MsgHeartbeat with from=self drove handleHeartbeat() to build
+    // a MsgHeartbeatResponse with to=self, tripping the egress invariant.
+    // The fix is surgical (drop in handleHeartbeat itself) rather than at
+    // step entry — broader from-self filtering breaks legitimate paths
+    // like single-node msgsAfterAppend self-loops.
+    @Test
+    void handleHeartbeatDropsHeartbeatFromSelf() throws RaftException {
+        MemoryStorage s = newTestMemoryStorage(withPeers(1, 2, 3));
+        Config cfg = newTestConfig(1, 10, 1, s);
+        Raft r = Raft.newRaft(cfg);
+        int msgsBefore = r.msgs().size() + r.msgsAfterAppend().size();
+        r.step(Eraftpb.Message.newBuilder()
+                .setMsgType(Eraftpb.MessageType.MsgHeartbeat)
+                .setFrom(1)        // == r.id, the self-spoof
+                .setTo(1)
+                .setTerm(1)
+                .build());
+        assertThat(r.msgs().size() + r.msgsAfterAppend().size())
+                .as("self-addressed heartbeat must not produce a response")
+                .isEqualTo(msgsBefore);
+    }
+
+    private static void assertVoteFamilyZeroTermDropped(Eraftpb.MessageType type) throws RaftException {
+        MemoryStorage s = newTestMemoryStorage(withPeers(1, 2, 3));
+        Config cfg = newTestConfig(1, 10, 1, s);
+        Raft r = Raft.newRaft(cfg);
+        long termBefore = r.term();
+        int msgsBefore = r.msgs().size() + r.msgsAfterAppend().size();
+
+        // Synthesise the malformed inbound: real peers always set term, but
+        // the fuzzer (and a hostile peer) doesn't.
+        r.step(Eraftpb.Message.newBuilder()
+                .setMsgType(type)
+                .setFrom(2)
+                .setTo(1)
+                // .setTerm(...) intentionally omitted → defaults to 0
+                .build());
+
+        // The drop is silent: no state change, no outbound message. The
+        // invariant trip used to manifest as a thrown RaftInvariantException
+        // before this regression test was meaningful.
+        assertThat(r.term()).as("%s term=0 must not advance our term", type).isEqualTo(termBefore);
+        assertThat(r.msgs().size() + r.msgsAfterAppend().size())
+                .as("%s term=0 must not produce an outbound response", type).isEqualTo(msgsBefore);
+    }
 }

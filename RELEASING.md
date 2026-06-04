@@ -119,56 +119,57 @@ git push origin main
 Wait for the `ci` workflow on this commit to go green across all six
 matrix legs.
 
-### 6. Trigger the publish workflow
+### 6. Tag and push — the tag is the trigger
 
 ```bash
-gh workflow run maven-publish.yml --ref main
-gh run watch $(gh run list --limit 1 --workflow=maven-publish.yml --json databaseId --jq '.[0].databaseId')
+RELEASE_SHA=$(git rev-parse HEAD)
+git tag -a "v$NEXT" -m "Release $NEXT" "$RELEASE_SHA"
+git push origin "v$NEXT"
 ```
 
-The workflow runs `mvn -U -B -ntp deploy -Prelease`, which:
+Annotated tags only — the message shows up in
+`git for-each-ref --format='%(contents)'` and the GitHub Releases UI.
+A lightweight tag still triggers the workflow, but the release notes
+that `softprops/action-gh-release` generates from it will be empty.
 
-1. Re-runs the integration suite (failsafe against the runner
+Pushing the tag fires
+[`release.yml`](.github/workflows/release.yml), which runs
+`mvn -U -B -ntp deploy -Prelease`:
+
+1. Verifies the tag literal matches the parent pom's `<version>` —
+   catches the easy mistake of tagging without bumping or vice
+   versa.
+2. Re-runs the integration suite (failsafe against the runner
    environment differing from the local one).
-2. GPG-signs every artefact using the secret-injected key.
-3. Uploads the deployment bundle to the Sonatype Central Portal via
+3. GPG-signs every artefact using the secret-injected key.
+4. Uploads the deployment bundle to the Sonatype Central Portal via
    the `central-publishing-maven-plugin`.
-4. Auto-publishes (`<autoPublish>true</>` in the parent pom) and
+5. Auto-publishes (`<autoPublish>true</>` in the parent pom) and
    waits until Central confirms the bundle is published
    (`<waitUntil>published</>`).
+6. Drafts a GitHub Release attached to the tag, with auto-generated
+   release notes (edit afterwards to add Maven coordinates / "what
+   this release means").
 
 Total time: ~30 minutes (most of it integration tests + Central
-indexing). If the workflow fails before the publish step the
-bundle never reaches Central; if it fails during publish the bundle
-is left in `FAILED` status on the Central Portal and can be inspected
-there.
+indexing). Watch progress:
+
+```bash
+gh run watch $(gh run list --limit 1 --workflow=release.yml --json databaseId --jq '.[0].databaseId')
+```
+
+If the workflow fails before the publish step the bundle never
+reaches Central. If it fails during publish, the bundle is left in
+`FAILED` status on the Central Portal and can be inspected there.
 
 **Once a version is published it cannot be removed or republished.**
 If a release goes out broken, the recovery path is a new patch
 version (`0.1.0-RC2`, `0.1.1`, etc.), not a re-publish.
 
-### 7. Tag the release commit
+### 7. Polish the GitHub Release notes
 
-```bash
-RELEASE_SHA=$(git rev-parse HEAD)   # or the exact commit that was published
-git tag -a "v$NEXT" -m "Release $NEXT" "$RELEASE_SHA"
-git push origin "v$NEXT"
-```
-
-Tag annotated, not lightweight — annotated tags carry the message
-that shows up in `git for-each-ref --format='%(contents)'` and the
-GitHub Releases UI.
-
-### 8. Create the GitHub Release
-
-```bash
-gh release create "v$NEXT" \
-    --title "$NEXT — <short headline>" \
-    --prerelease \                  # drop for GA
-    --notes-file <path-or-stdin>
-```
-
-The release notes should include:
+`release.yml` creates the Release with auto-generated commit-list
+notes. Edit it to add (in this order):
 
 - A one-line summary.
 - The Maven coordinates (raft-core / raft-transport-grpc /
@@ -184,7 +185,7 @@ The release notes should include:
 See the [`v0.1.0-RC1` release](https://github.com/x-infra-lab/x-raft-lib/releases/tag/v0.1.0-RC1)
 for the established format.
 
-### 9. Bump main back to `-SNAPSHOT`
+### 8. Bump main back to `-SNAPSHOT`
 
 Releases other than patch releases bump the next development version:
 
@@ -198,7 +199,7 @@ git commit -am "Bump main to $NEXT_DEV"
 git push origin main
 ```
 
-### 10. Announce (optional)
+### 9. Announce (optional)
 
 For RCs and GAs:
 
@@ -221,9 +222,11 @@ git cherry-pick <sha>...<sha>
 # Push the branch + tag; main does not move.
 ```
 
-The maintenance branch should run the same `ci` workflow. The release
-workflow is the same one (`maven-publish.yml`) triggered from the
-branch ref instead of `main`.
+The maintenance branch should run the same `ci` workflow.
+`release.yml` triggers from any tag matching the version pattern, so
+tagging from the maintenance branch (`git tag -a v0.1.1 ...; git push
+origin v0.1.1`) publishes exactly like a `main`-driven release —
+git history remains the source of truth for what was released.
 
 ## Yanking a release
 
@@ -238,7 +241,7 @@ levers are:
 ## Cheat sheet
 
 ```bash
-# release a new version end-to-end
+# release a new version end-to-end (tag-driven, single workflow)
 NEXT=0.1.0-RC2
 git pull && find . -type f \( -name pom.xml -o -name "*.md" \) \
     -not -path "*/target/*" \
@@ -247,10 +250,13 @@ git pull && find . -type f \( -name pom.xml -o -name "*.md" \) \
 mvn -Prelease verify -DskipTests -Djacoco.skip=true -Dgpg.skip=true
 git commit -am "Release $NEXT" && git push origin main
 # (wait for ci on HEAD to go green)
-gh workflow run maven-publish.yml --ref main
-# (wait ~30 min)
+
+# Tag pushes the trigger — release.yml deploys + drafts the GitHub Release.
 git tag -a "v$NEXT" -m "Release $NEXT" HEAD && git push origin "v$NEXT"
-gh release create "v$NEXT" --title "$NEXT — ..." --prerelease --notes-file RELEASE_NOTES.md
+gh run watch $(gh run list --limit 1 --workflow=release.yml --json databaseId --jq '.[0].databaseId')
+# (~30 min later)
+gh release edit "v$NEXT" --notes-file RELEASE_NOTES.md   # add coordinates / "what this means"
+
 # bump back to dev:
 NEXT_DEV=0.1.0-SNAPSHOT
 find . -type f -name pom.xml -not -path "*/target/*" \

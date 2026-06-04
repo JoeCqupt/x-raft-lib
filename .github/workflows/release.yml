@@ -1,13 +1,13 @@
 name: release
 
 # Tag-driven release. Push an annotated tag like `v0.2.0` (or pre-release
-# `v0.2.0-rc1`) and this workflow runs the full publish pipeline that
-# `maven-publish.yml` exposes as a manual button. Tag-driven means git
-# history is the source of truth for "what is released".
+# `v0.2.0-RC1`) and this workflow GPG-signs every artefact, deploys to
+# Maven Central via the central-publishing plugin, and drafts a GitHub
+# Release attached to the tag. Tag-driven means git history is the
+# single source of truth for "what is released" — there is no manual
+# dispatch path that could double-fire and clash with this one.
 #
-# To roll a release:
-#   git tag -a v0.2.0 -m "v0.2.0"
-#   git push origin v0.2.0
+# Full release recipe lives in /RELEASING.md.
 
 on:
   push:
