@@ -101,7 +101,7 @@ jobs:
       # the token wired to the optional secret (graceful no-op if unset).
       - name: Upload coverage to Codecov
         if: success() && matrix.os == 'ubuntu-latest' && matrix.jdk == '17'
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: >-
