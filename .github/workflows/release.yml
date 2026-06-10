@@ -63,7 +63,7 @@ jobs:
       - name: Create GitHub Release
         # Drafts a Release attached to this tag and lets release-drafter
         # / manual editing fill in the body afterwards.
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref, '-') }}
