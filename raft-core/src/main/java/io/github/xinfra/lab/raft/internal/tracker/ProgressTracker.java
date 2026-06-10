@@ -171,6 +171,7 @@ public class ProgressTracker {
         public Set<Long> getLearnersNext() { return learnersNext; }
         public void setLearnersNext(Set<Long> learnersNext) { this.learnersNext = learnersNext; }
 
+        @Override
         public Config clone() {
             Config c = new Config();
             c.voters = new JointConfig(

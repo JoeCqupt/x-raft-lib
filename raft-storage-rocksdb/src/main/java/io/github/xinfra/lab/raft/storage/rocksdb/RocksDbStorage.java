@@ -20,10 +20,13 @@ import io.github.xinfra.lab.raft.RaftException;
 import io.github.xinfra.lab.raft.RaftInvariantException;
 import io.github.xinfra.lab.raft.Storage;
 import io.github.xinfra.lab.raft.proto.Eraftpb;
+import org.rocksdb.BlockBasedTableConfig;
+import org.rocksdb.BloomFilter;
 import org.rocksdb.ColumnFamilyDescriptor;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.DBOptions;
+import org.rocksdb.LRUCache;
 import org.rocksdb.Options;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
@@ -99,7 +102,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     private static final byte[] CF_SNAPSHOT = bytes("snapshot");
 
     private static final byte[] KEY_HARD_STATE = bytes("hard_state");
-    private static final byte[] KEY_FIRST_INDEX = bytes("first_index");
     private static final byte[] KEY_SNAPSHOT = bytes("snapshot");
     private static final byte[] KEY_APPLIED = bytes("applied");
     private static final byte[] KEY_CONF_STATE = bytes("conf_state");
@@ -119,12 +121,14 @@ public class RocksDbStorage implements Storage, AutoCloseable {
 
     private final RocksDB db;
     private final List<ColumnFamilyHandle> cfHandles;
-    private final ColumnFamilyHandle cfDefault;
     private final ColumnFamilyHandle cfLog;
     private final ColumnFamilyHandle cfState;
     private final ColumnFamilyHandle cfSnap;
     private final WriteOptions writeOpts;
     private final Path snapDir;
+
+    private final LRUCache blockCache;
+    private final BloomFilter bloomFilter;
 
     /**
      * Private monitor used by every {@code synchronized} block in this class.
@@ -138,33 +142,51 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     private volatile boolean closed = false;
 
     public RocksDbStorage(Path dir) throws RocksDBException, IOException {
-        this(dir, true);
+        this(dir, RocksDbStorageOptions.DEFAULT);
     }
 
     public RocksDbStorage(Path dir, boolean fsync) throws RocksDBException, IOException {
+        this(dir, RocksDbStorageOptions.builder().fsync(fsync).build());
+    }
+
+    public RocksDbStorage(Path dir, RocksDbStorageOptions options) throws RocksDBException, IOException {
         Files.createDirectories(dir);
         this.snapDir = dir.resolve(SNAP_SUBDIR);
         Files.createDirectories(snapDir);
-        // Drop any *.tmp side-car files left behind by a crash mid-write.
         cleanupTempSnapshotFiles(snapDir);
 
-        try (Options opts = new Options().setCreateIfMissing(true).setCreateMissingColumnFamilies(true);
-             ColumnFamilyOptions cfOpts = new ColumnFamilyOptions()) {
-            // Probe existing CFs for tolerant open.
+        this.blockCache = new LRUCache(options.blockCacheSize);
+        this.bloomFilter = options.bloomFilterBitsPerKey > 0
+                ? new BloomFilter(options.bloomFilterBitsPerKey)
+                : null;
+
+        try (Options opts = new Options().setCreateIfMissing(true).setCreateMissingColumnFamilies(true)) {
             List<byte[]> existing;
             try {
                 existing = RocksDB.listColumnFamilies(opts, dir.toString());
             } catch (RocksDBException e) {
-                // Fresh DB; will be created with our descriptor list.
                 existing = new ArrayList<>();
             }
+
+            BlockBasedTableConfig tableConfig = new BlockBasedTableConfig()
+                    .setBlockCache(blockCache)
+                    .setBlockSize(options.blockSize);
+            if (bloomFilter != null) {
+                tableConfig.setFilterPolicy(bloomFilter)
+                        .setCacheIndexAndFilterBlocks(true);
+            }
+
+            ColumnFamilyOptions cfOpts = new ColumnFamilyOptions()
+                    .setTableFormatConfig(tableConfig)
+                    .setWriteBufferSize(options.writeBufferSize)
+                    .setMaxWriteBufferNumber(options.maxWriteBufferNumber)
+                    .setCompressionType(options.compressionType)
+                    .setCompactionStyle(options.compactionStyle);
 
             List<ColumnFamilyDescriptor> descriptors = new ArrayList<>();
             for (byte[] name : Arrays.asList(CF_DEFAULT, CF_LOG, CF_STATE, CF_SNAPSHOT)) {
                 descriptors.add(new ColumnFamilyDescriptor(name, cfOpts));
             }
-            // If RocksDB's CF list contains anything else (legacy state),
-            // include it so open() doesn't fail.
             for (byte[] name : existing) {
                 boolean known = false;
                 for (ColumnFamilyDescriptor d : descriptors) {
@@ -176,13 +198,14 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             this.cfHandles = new ArrayList<>();
             DBOptions dbOpts = new DBOptions()
                     .setCreateIfMissing(true)
-                    .setCreateMissingColumnFamilies(true);
+                    .setCreateMissingColumnFamilies(true)
+                    .setMaxBackgroundJobs(options.maxBackgroundJobs);
             this.db = RocksDB.open(dbOpts, dir.toString(), descriptors, this.cfHandles);
-            this.cfDefault = cfHandles.get(0);
+            // cfHandles.get(0) is the RocksDB default CF (unused by raft)
             this.cfLog = cfHandles.get(1);
             this.cfState = cfHandles.get(2);
             this.cfSnap = cfHandles.get(3);
-            this.writeOpts = new WriteOptions().setSync(fsync);
+            this.writeOpts = new WriteOptions().setSync(options.fsync);
         }
     }
 
@@ -691,6 +714,16 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                 db.close();
             } catch (Throwable t) {
                 LOG.warn("close db failed: {}", t.toString());
+            }
+            try {
+                if (bloomFilter != null) bloomFilter.close();
+            } catch (Throwable t) {
+                LOG.warn("close bloomFilter failed: {}", t.toString());
+            }
+            try {
+                blockCache.close();
+            } catch (Throwable t) {
+                LOG.warn("close blockCache failed: {}", t.toString());
             }
         }
     }

@@ -103,6 +103,8 @@ public class Raft {
 
     RaftMetrics metrics = RaftMetrics.NOOP;
 
+    RateLimitedLog proposalDropLog;
+
     @FunctionalInterface
     interface StepFunction {
         void step(Raft r, Eraftpb.Message m) throws RaftException;
@@ -137,6 +139,7 @@ public class Raft {
         r.maxPendingReadIndexMessages = c.maxPendingReadIndexMessages;
         r.maxReadStates = c.maxReadStates;
         r.metrics = c.metrics != null ? c.metrics : RaftMetrics.NOOP;
+        r.proposalDropLog = new RateLimitedLog(c.logger);
         r.msgs = new ArrayList<>();
         r.msgsAfterAppend = new ArrayList<>();
         r.readStates = new ArrayList<>();
@@ -483,7 +486,7 @@ public class Raft {
                     .build());
         }
         if (!increaseUncommittedSize(newEnts)) {
-            logger.warn("{:x} appending new entries to log would exceed uncommitted entry size limit; dropping proposal", id);
+            proposalDropLog.warn("{:x} appending new entries to log would exceed uncommitted entry size limit; dropping proposal", id);
             return false;
         }
 
@@ -549,6 +552,7 @@ public class Raft {
 
     // ============= become* =============
     public void becomeFollower(long newTerm, long newLead) {
+        proposalDropLog.flush();
         stepFn = Raft::stepFollower;
         reset(newTerm);
         tickFn = this::tickElection;
@@ -562,6 +566,7 @@ public class Raft {
         if (state == RaftStateType.StateLeader) {
             throw new RaftInvariantException("invalid transition [leader -> candidate]");
         }
+        proposalDropLog.flush();
         stepFn = Raft::stepCandidate;
         reset(term + 1);
         tickFn = this::tickElection;
@@ -575,6 +580,7 @@ public class Raft {
         if (state == RaftStateType.StateLeader) {
             throw new RaftInvariantException("invalid transition [leader -> pre-candidate]");
         }
+        proposalDropLog.flush();
         stepFn = Raft::stepCandidate;
         trk.resetVotes();
         tickFn = this::tickElection;
@@ -587,6 +593,7 @@ public class Raft {
         if (state == RaftStateType.StateFollower) {
             throw new RaftInvariantException("invalid transition [follower -> leader]");
         }
+        proposalDropLog.flush();
         stepFn = Raft::stepLeader;
         reset(term);
         tickFn = this::tickHeartbeat;
@@ -923,7 +930,7 @@ public class Raft {
                     throw RaftException.ErrProposalDropped;
                 }
                 if (r.leadTransferee != Util.NONE) {
-                    r.logger.debug("{:x} [term {}] transfer leadership to {:x} is in progress; dropping proposal",
+                    r.proposalDropLog.info("{:x} [term {}] transfer leadership to {:x} is in progress; dropping proposal",
                             r.id, r.term, r.leadTransferee);
                     r.metrics.onProposal(RaftMetrics.ProposalResult.DROPPED);
                     throw RaftException.ErrProposalDropped;
@@ -1073,6 +1080,7 @@ public class Raft {
                         }
                         if (r.id != m.getFrom()) {
                             while (r.maybeSendAppend(m.getFrom(), false)) {
+                                // drain: send as many appends as the peer can accept
                             }
                         }
                         if (m.getFrom() == r.leadTransferee && pr.getMatch() == r.raftLog.lastIndex()) {
@@ -1163,7 +1171,7 @@ public class Raft {
 
         switch (m.getMsgType()) {
             case MsgPropose:
-                r.logger.info("{:x} no leader at term {}; dropping proposal", r.id, r.term);
+                r.proposalDropLog.info("{:x} no leader at term {}; dropping proposal", r.id, r.term);
                 throw RaftException.ErrProposalDropped;
             case MsgAppend:
                 r.becomeFollower(m.getTerm(), m.getFrom());
@@ -1208,10 +1216,10 @@ public class Raft {
         switch (m.getMsgType()) {
             case MsgPropose:
                 if (r.lead == Util.NONE) {
-                    r.logger.info("{:x} no leader at term {}; dropping proposal", r.id, r.term);
+                    r.proposalDropLog.info("{:x} no leader at term {}; dropping proposal", r.id, r.term);
                     throw RaftException.ErrProposalDropped;
                 } else if (r.disableProposalForwarding) {
-                    r.logger.info("{:x} not forwarding to leader {:x} at term {}; dropping proposal", r.id, r.lead, r.term);
+                    r.proposalDropLog.info("{:x} not forwarding to leader {:x} at term {}; dropping proposal", r.id, r.lead, r.term);
                     throw RaftException.ErrProposalDropped;
                 }
                 r.send(m.toBuilder().setTo(r.lead));

@@ -37,6 +37,7 @@ public class Inflights {
         this.bytesBuffer = new long[0];
     }
 
+    @Override
     public Inflights clone() {
         Inflights ins = new Inflights(size, maxBytes);
         ins.start = this.start;

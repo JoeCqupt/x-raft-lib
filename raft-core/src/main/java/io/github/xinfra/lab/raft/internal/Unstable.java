@@ -26,8 +26,6 @@ import java.util.List;
  * not yet been written to Storage.
  */
 public class Unstable {
-    private static final RaftLogger logger = DefaultRaftLogger.getDefault();
-
     private Eraftpb.Snapshot snapshot;
     private List<Eraftpb.Entry> entries;
     private long offset;

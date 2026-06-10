@@ -17,7 +17,9 @@ package io.github.xinfra.lab.raft.internal.quorum;
 import io.github.xinfra.lab.raft.*;
 import io.github.xinfra.lab.raft.internal.*;
 
-import java.util.*;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * JointConfig is a configuration of two groups of (possibly overlapping)
