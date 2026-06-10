@@ -282,6 +282,22 @@ on Windows pending an upstream rocksdbjni native-binary fix.
 | Spotless format / unused-import gate | `mvn verify` | no diff |
 | CodeQL static analysis | [`codeql`](.github/workflows/codeql.yml) | no high-severity findings |
 
+## Documentation
+
+Comprehensive bilingual (English / Chinese) documentation lives in
+[`docs/`](docs/index.md):
+
+- [Architecture & Design](docs/architecture.md) — design philosophy, core internals, Storage & Transport interfaces
+- [Getting Started](docs/getting-started.md) — prerequisites, KV demo, embedding guide, configuration reference
+- [Testing Strategy](docs/testing.md) — test pyramid, unit / property / fuzz / integration / chaos / soak
+- [CI/CD & Quality Gates](docs/ci.md) — CI pipeline, fuzz nightly, chaos soak weekly, release process
+
+Chinese versions: [文档中心](docs/index.zh.md) |
+[架构与设计](docs/architecture.zh.md) |
+[快速开始](docs/getting-started.zh.md) |
+[测试策略](docs/testing.zh.md) |
+[CI/CD 与质量门禁](docs/ci.zh.md)
+
 ## Contributing & security
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
