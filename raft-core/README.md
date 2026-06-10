@@ -5,8 +5,7 @@
 > correctness is on par with etcd-raft, and the surrounding pieces are
 > in place: pluggable metrics, error categorisation, a gRPC transport
 > ([raft-transport-grpc](../raft-transport-grpc)) and a RocksDB Storage
-> ([raft-storage-rocksdb](../raft-storage-rocksdb)). Remaining gaps
-> before `1.0` are tracked in [`TODO.md`](./TODO.md).
+> ([raft-storage-rocksdb](../raft-storage-rocksdb)).
 
 English | [中文](README.zh.md)
 
@@ -163,8 +162,7 @@ JDK 17+ required.
 </dependency>
 ```
 
-> Not yet published to Maven Central. Build from source for now.
-> The `protobuf-java` runtime (3.25.x) leaks into your classpath via this
+> The `protobuf-java` runtime leaks into your classpath via this
 > artifact — pinning will matter once we ship a stable line.
 
 ## Configuration cheatsheet
@@ -177,8 +175,6 @@ production-safe** — pay attention to:
 - `maxSizePerMsg` defaults to `0` (validate accepts → leader will pack the
   entire log into one MsgAppend on first contact).
 - `electionTick` should be ≥ `10 * heartbeatTick` (not enforced).
-
-These are tracked in [`TODO.md`](./TODO.md) Step 2.1.
 
 ## Differences from etcd-io/raft
 
@@ -224,25 +220,6 @@ dependency:
 - [**raft-tests**](../raft-tests) — cross-module integration tests
   against real gRPC sockets + real RocksDB stores: single-node,
   3-node cluster, restart-from-disk, leader failover.
-
-## Roadmap
-
-See [`TODO.md`](./TODO.md). At a glance:
-
-- **Done** — open-source compliance (license headers, NOTICE,
-  Sonatype-ready pom); production hardening (bounded queues, pluggable
-  metrics, error categorisation, stop-with-timeout, leader observer,
-  Storage contract docs); integration completeness (Transport interface,
-  gRPC transport with TLS/mTLS + chunked snapshots, RocksDB storage,
-  runnable multi-node KV demo, GitHub Actions CI); the `Storage` streaming
-  snapshot API (sidecar payload, never fully in heap); structured
-  logging/MDC (`RaftMdc`); a Spotless format gate plus CodeQL/Dependabot.
-- **Remaining before 1.0** — end-to-end zero-copy snapshot transmission
-  (core's `MsgSnapshot` and the gRPC transport still materialize the payload
-  per-end), dropping the `Eraftpb` protobuf leak / `Status` view types from
-  the public surface, broader chaos/soak coverage, and the first Maven
-  Central release. The public-vs-internal package boundary is now in place:
-  implementation classes live under `io.github.xinfra.lab.raft.internal`.
 
 ## Contributing
 

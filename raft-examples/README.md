@@ -68,16 +68,10 @@ convergence):
 mvn -pl raft-examples -am test
 ```
 
-## What's not covered yet
+## What's not covered here
 
-- Failure-injection harness (kill the leader mid-workload, partition
-  nodes).
-- Read-index / linearizable read path.
-- Snapshot install demo across nodes.
-- Restart-from-disk demo (proves `RocksDbStorage` survives a crash).
-- Client RPC layer (a network-facing KV API rather than in-process
-  `propose`).
-
-These belong in a future demo expansion; the existing demo is the
-minimum to prove that raft-core, the transport, and the storage plug
-together into a working replicated KV system.
+Failure injection, leader failover, snapshot install, restart-from-disk,
+linearizable reads, and chaos testing are all covered in
+[`raft-tests`](../raft-tests). This module is the minimum demo that proves
+raft-core, the transport, and the storage plug together into a working
+replicated KV system.

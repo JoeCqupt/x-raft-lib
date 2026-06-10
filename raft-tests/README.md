@@ -27,6 +27,9 @@ This module is **not** published. It exists separately so:
 | [`SnapshotInstallIntegrationTest`](src/test/java/io/github/xinfra/lab/raft/tests/SnapshotInstallIntegrationTest.java) | Partition a follower, commit + snapshot + compact past its match index, then heal. The follower can no longer be caught up entry-by-entry and must install a `MsgSnapshot`, after which it converges and applies post-heal proposals. |
 | [`DynamicMembershipIntegrationTest`](src/test/java/io/github/xinfra/lab/raft/tests/DynamicMembershipIntegrationTest.java) | ConfChange V2 end to end: removing a follower converges the persisted voter set to the remaining two; a brand-new node joins as a learner, catches up via replication, is promoted to voter, and the 4-voter cluster keeps committing. |
 | [`PartitionIntegrationTest`](src/test/java/io/github/xinfra/lab/raft/tests/PartitionIntegrationTest.java) | A minority partition cannot commit while the majority keeps progressing; after heal the whole cluster converges. A 20%-loss link still converges because raft retransmits. |
+| [`ChaosFaultInjectionIntegrationTest`](src/test/java/io/github/xinfra/lab/raft/tests/ChaosFaultInjectionIntegrationTest.java) | Random fault injection (message loss, partition, isolation) against a live cluster; verifies the cluster recovers and converges after chaos stops. |
+| [`KvLinearizabilityIntegrationTest`](src/test/java/io/github/xinfra/lab/raft/tests/KvLinearizabilityIntegrationTest.java) | Concurrent KV operations against a 3-node cluster with a linearizability checker to verify consistency. |
+| [`ZeroCopySnapshotStreamingTest`](src/test/java/io/github/xinfra/lab/raft/tests/ZeroCopySnapshotStreamingTest.java) | 64 MiB byte-for-byte streaming snapshot verification — leader streams sidecar payload out-of-band to follower, zero heap copy. |
 | [`SoakStabilityTest`](src/test/java/io/github/xinfra/lab/raft/tests/SoakStabilityTest.java) | (`@Tag("soak")`, off by default) Sustained proposals + periodic snapshot/compaction; asserts continuous commit progress, no apply backlog, and no thread leak. |
 
 ## Fault injection
@@ -57,8 +60,5 @@ deterministic.
 
 ## What's not covered yet
 
-- ReadIndex / linearizable reads.
 - Asymmetric (one-way) reachability faults — `ChaosController` currently
   models symmetric link blocks; one-directional delay/loss is future work.
-
-These are tracked in [`raft/TODO.md`](../raft-core/TODO.md) Step 3.5.

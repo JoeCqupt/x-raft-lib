@@ -84,10 +84,10 @@ watermarks in the `state` column family:
 
 ## Status
 
-Alpha. Production hardening still missing:
+Alpha. RocksDB tuning knobs are exposed via `RocksDbStorageOptions.Builder`
+(block cache size, write buffer, compaction style, compression, bloom filter,
+etc.). Remaining production hardening:
 
-- Configurable RocksDB options (block cache, compaction style,
-  WAL settings) — currently uses defaults.
 - Per-CF metrics surfaced via `RaftMetrics`.
 - Periodic checkpoint / backup helpers.
 

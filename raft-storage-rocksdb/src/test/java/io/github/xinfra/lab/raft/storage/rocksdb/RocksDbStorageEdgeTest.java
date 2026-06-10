@@ -22,6 +22,9 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.stream.Stream;
 
+import org.rocksdb.CompactionStyle;
+import org.rocksdb.CompressionType;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -417,5 +420,66 @@ class RocksDbStorageEdgeTest {
         storage.close();
         // Mark already-closed so the @AfterEach doesn't double-close.
         storage = null;
+    }
+
+    // ============= RocksDbStorageOptions =============
+
+    @Test
+    void customOptionsRoundTrip() throws Exception {
+        storage.close();
+        RocksDbStorageOptions opts = RocksDbStorageOptions.builder()
+                .fsync(false)
+                .blockCacheSize(16L << 20)
+                .writeBufferSize(8L << 20)
+                .maxWriteBufferNumber(2)
+                .maxBackgroundJobs(1)
+                .compressionType(CompressionType.ZSTD_COMPRESSION)
+                .compactionStyle(CompactionStyle.UNIVERSAL)
+                .bloomFilterBitsPerKey(16)
+                .blockSize(8192)
+                .build();
+        storage = new RocksDbStorage(tmp.resolve("custom-opts"), opts);
+        storage.append(List.of(entry(1, 1, "custom"), entry(2, 1, "opts")));
+        assertThat(storage.lastIndex()).isEqualTo(2);
+        assertThat(storage.entries(1, 3, Long.MAX_VALUE)).hasSize(2);
+        assertThat(storage.term(1)).isEqualTo(1);
+    }
+
+    @Test
+    void defaultOptionsMatchLegacyConstructor() throws Exception {
+        storage.close();
+        // The DEFAULT options object should produce a working storage
+        // identical to the (Path) constructor.
+        storage = new RocksDbStorage(tmp.resolve("default-opts"), RocksDbStorageOptions.DEFAULT);
+        storage.append(List.of(entry(1, 1, "a")));
+        assertThat(storage.lastIndex()).isEqualTo(1);
+    }
+
+    @Test
+    void optionsWithBloomDisabled() throws Exception {
+        storage.close();
+        RocksDbStorageOptions opts = RocksDbStorageOptions.builder()
+                .fsync(false)
+                .bloomFilterBitsPerKey(0)
+                .build();
+        storage = new RocksDbStorage(tmp.resolve("no-bloom"), opts);
+        storage.append(List.of(entry(1, 1, "no-bloom")));
+        assertThat(storage.term(1)).isEqualTo(1);
+    }
+
+    @Test
+    void optionsBuilderRejectsInvalidValues() {
+        assertThatThrownBy(() -> RocksDbStorageOptions.builder().blockCacheSize(-1).build())
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> RocksDbStorageOptions.builder().writeBufferSize(0).build())
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> RocksDbStorageOptions.builder().maxWriteBufferNumber(0).build())
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> RocksDbStorageOptions.builder().maxBackgroundJobs(0).build())
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> RocksDbStorageOptions.builder().bloomFilterBitsPerKey(-1).build())
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> RocksDbStorageOptions.builder().blockSize(0).build())
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }
