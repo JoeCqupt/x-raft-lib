@@ -20,8 +20,7 @@ production-grade gRPC and RocksDB modules ship alongside.
 > (immutable `Status` / `Ready` records, `Config.Builder`, JSpecify
 > nullability, internal `Raft` fields locked to package-private). RC
 > means the `0.1.0` API surface is frozen, but production mileage /
-> external benchmarks are still ahead of `1.0` — see
-> [`raft-core/TODO.md`](raft-core/TODO.md). Pin to an exact version
+> external benchmarks are still ahead of `1.0`. Pin to an exact version
 > until `1.0`.
 
 ## Modules
@@ -282,11 +281,6 @@ on Windows pending an upstream rocksdbjni native-binary fix.
 | Soak + chaos stress | [`chaos-soak-weekly`](.github/workflows/chaos-soak-weekly.yml) | 30 min soak + 5× chaos must pass |
 | Spotless format / unused-import gate | `mvn verify` | no diff |
 | CodeQL static analysis | [`codeql`](.github/workflows/codeql.yml) | no high-severity findings |
-
-## Roadmap
-
-See [`raft-core/TODO.md`](raft-core/TODO.md) for the full breakdown of
-done / in-progress / outstanding items before `1.0`.
 
 ## Contributing & security
 

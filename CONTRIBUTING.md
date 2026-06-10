@@ -31,10 +31,9 @@ cd raft-core && mvn test  # core suite + jacoco gates, JDK 17+
 - **Don't break the jacoco gates.** Defaults: instruction ≥85%, branch
   ≥80%, line ≥88%, method ≥85%. Raise the floor in `pom.xml` after
   improving coverage; don't lower it.
-- **Keep public API stable.** The `internal-vs-public` boundary is being
-  designed (see `raft-core/TODO.md`); until that lands, treat anything in
-  `tracker/`, `quorum/`, `confchange/`, `Util` as internal even though
-  they're nominally `public`.
+- **Keep public API stable.** Treat anything in `tracker/`, `quorum/`,
+  `confchange/`, `Util` as internal even though they're nominally
+  `public`.
 - **Source headers.** Every new `.java` file gets the Apache-2.0 header
   from existing files (see e.g. `Raft.java:1-15`).
 
@@ -47,8 +46,8 @@ the *why*. Mirror that style.
 ## What's in scope
 
 - Bug fixes against the etcd-raft reference behaviour.
-- Roadmap items from [`raft-core/TODO.md`](./raft-core/TODO.md). Pick a task and
-  comment on the related issue (or open one).
+- Roadmap items and enhancements. Open an issue to discuss before sending
+  a PR for non-trivial changes.
 - Documentation, examples, integration recipes (RocksDB / WAL Storage /
   Netty transport are all wanted).
 

@@ -109,7 +109,7 @@ gRPC transport, and RocksDB storage referenced below.
 - English `README.md`; Chinese version moved to `README.zh.md`.
 - `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, this
   `CHANGELOG.md`.
-- `TODO.md` roadmap to production / PB-scale / open-source readiness.
+- Project roadmap documentation.
 - Sonatype-ready pom metadata (`<licenses>`, `<developers>`, `<scm>`,
   `<issueManagement>`, release profile with sources/javadoc/gpg).
 

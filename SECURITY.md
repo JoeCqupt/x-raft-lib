@@ -42,6 +42,6 @@ You can expect:
 
 - Issues caused by your `Storage` or transport implementation.
 - Resource exhaustion via a single node sending an unbounded message
-  stream — known issue, see `raft-core/TODO.md`.
+  stream.
 - Anything that requires a misconfigured cluster to reproduce (e.g. all
   nodes running with `checkQuorum=false` and the same id).

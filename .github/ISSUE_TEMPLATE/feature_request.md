@@ -11,8 +11,7 @@ What are you trying to do that x-raft-lib doesn't support today?
 
 ## Proposed solution
 
-What you'd like to see. If it maps to an item in
-[`raft-core/TODO.md`](../../raft-core/TODO.md), link it.
+What you'd like to see.
 
 ## Alternatives considered
 
