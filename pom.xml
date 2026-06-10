@@ -67,7 +67,7 @@
         <protobuf.version>4.35.0</protobuf.version>
         <protoc.version>4.35.0</protoc.version>
         <grpc.version>1.81.0</grpc.version>
-        <rocksdb.version>10.10.1</rocksdb.version>
+        <rocksdb.version>10.10.1.1</rocksdb.version>
         <slf4j.version>2.0.16</slf4j.version>
         <logback.version>1.5.33</logback.version>
         <junit.version>6.1.0</junit.version>
