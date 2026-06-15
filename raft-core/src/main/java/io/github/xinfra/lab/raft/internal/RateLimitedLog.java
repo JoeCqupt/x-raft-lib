@@ -31,6 +31,7 @@ final class RateLimitedLog {
     private final long intervalNanos;
     private long lastLogNanos;
     private long suppressed;
+    private boolean hasLogged;
 
     RateLimitedLog(RaftLogger logger) {
         this(logger, DEFAULT_INTERVAL_NANOS);
@@ -62,12 +63,13 @@ final class RateLimitedLog {
 
     private boolean shouldLog() {
         long now = System.nanoTime();
-        if (now - lastLogNanos >= intervalNanos) {
+        if (!hasLogged || now - lastLogNanos >= intervalNanos) {
             if (suppressed > 0) {
                 logger.info("(suppressed {} proposal-drop messages)", suppressed);
                 suppressed = 0;
             }
             lastLogNanos = now;
+            hasLogged = true;
             return true;
         }
         suppressed++;
