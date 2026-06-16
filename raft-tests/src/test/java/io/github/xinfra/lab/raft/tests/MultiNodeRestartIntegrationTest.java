@@ -6,7 +6,6 @@
  */
 package io.github.xinfra.lab.raft.tests;
 
-import io.github.xinfra.lab.raft.RaftStateType;
 import io.github.xinfra.lab.raft.examples.RaftPeer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
