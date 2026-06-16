@@ -15,7 +15,7 @@ I/O 由上层应用驱动。Raft 的全部输出打包为 `Ready`，由上层按
 
 ## 状态
 
-- **448+ 测试**（unit / property / datadriven / system / trace / async / integration / chaos / linearizability）
+- **396+ 测试**（unit / property / datadriven / system / trace / async / integration / chaos / linearizability）
 - **覆盖率**：instruction ≥85% / branch ≥80% / line ≥88% / method ≥85%（jacoco gate）
 - **JMH baseline**：见 [`benchmarks/baseline.md`](./benchmarks/baseline.md)
 - 完整对齐 etcd/raft 的核心语义（election、log replication、snapshot、conf change、ReadIndex、PreVote、CheckQuorum、ForgetLeader、TransferLeader、AsyncStorageWrites）
@@ -47,29 +47,31 @@ io.github.xinfra.lab.raft              // 公开 API
 ## 使用方式（RawNode，单线程）
 
 ```java
-Config cfg = new Config();
-cfg.id = 1;
-cfg.electionTick = 10;
-cfg.heartbeatTick = 1;
-cfg.storage = new MemoryStorage();
-cfg.maxSizePerMsg = Long.MAX_VALUE;
-cfg.maxInflightMsgs = 256;
-// 可选：cfg.preVote = true; cfg.checkQuorum = true;
-// 可选：cfg.asyncStorageWrites = true;
+MemoryStorage storage = new MemoryStorage();
+Config cfg = Config.builder()
+        .id(1)
+        .electionTick(10)
+        .heartbeatTick(1)
+        .storage(storage)
+        .maxSizePerMsg(Long.MAX_VALUE)
+        .maxInflightMsgs(256)
+        // 可选：.preVote(true).checkQuorum(true)
+        // 可选：.asyncStorageWrites(true)
+        .build();
 
 RawNode rn = RawNode.newRawNode(cfg);
-rn.bootstrap(List.of(new Peer(1)));   // 或 cfg.storage 已经有 ConfState
+rn.bootstrap(List.of(new Peer(1)));   // 或 storage 已经有 ConfState
 
 while (running) {
     rn.tick();                         // 外部驱动时钟
     for (Message msg : received) rn.step(msg);
     if (rn.hasReady()) {
         Ready rd = rn.ready();
-        persist(rd.entries, rd.hardState);     // 持久化
-        if (!Util.isEmptySnap(rd.snapshot)) storage.applySnapshot(rd.snapshot);
-        send(rd.messages);                      // 网络发送
-        apply(rd.committedEntries);             // 应用到状态机
-        rn.advance(rd);                         // 通知 raft 完成
+        persist(rd.entries(), rd.hardState());     // 持久化
+        if (!Util.isEmptySnap(rd.snapshot())) storage.applySnapshot(rd.snapshot());
+        send(rd.messages());                       // 网络发送
+        apply(rd.committedEntries());              // 应用到状态机
+        rn.advance(rd);                            // 通知 raft 完成
     }
 }
 ```
@@ -95,10 +97,10 @@ Status st = n.status();
 // 消费 Ready 的循环（单一消费者）：
 while (running) {
     Ready rd = n.ready();
-    persist(rd.entries, rd.hardState);
-    if (!Util.isEmptySnap(rd.snapshot)) storage.applySnapshot(rd.snapshot);
-    send(rd.messages);
-    apply(rd.committedEntries);
+    persist(rd.entries(), rd.hardState());
+    if (!Util.isEmptySnap(rd.snapshot())) storage.applySnapshot(rd.snapshot());
+    send(rd.messages());
+    apply(rd.committedEntries());
     n.advance(rd);
 }
 
@@ -145,11 +147,16 @@ diff 报告。25+ 个命令支持完整的 raft 场景。
 **Rewrite 模式**：写场景骨架（命令 + `----`），跑 `mvn test -Ddatadriven.rewrite=true`
 自动捕获实际输出填入 expected。审查 diff，确认无误后正常跑。
 
-当前 scenarios：single_node、three_node_election、partition_recovery、
-forget_leader、leader_transfer、confchange_v2_joint、prevote_no_term_bump、
-checkquorum_leader_steps_down、heartbeat_resp_recovers_from_probing、
-snapshot_install_after_compact、replicate_pause、lagging_commit、
-snapshot_succeed_via_app_resp。
+当前 28 个 scenarios：single_node、single_node_log_state、single_node_propose_batch、
+single_node_snapshot_compact、two_node_election、three_node_election、
+three_node_propose_replicate、partition_recovery、forget_leader、leader_transfer、
+confchange_v2_joint、confchange_add_learner、confchange_add_voter、
+confchange_demote_voter_to_learner、confchange_learner_lifecycle、
+confchange_promote_learner、confchange_remove_learner、confchange_remove_then_readd、
+confchange_remove_voter、prevote_no_term_bump、checkquorum_leader_steps_down、
+heartbeat_resp_recovers_from_probing、snapshot_install_after_compact、
+snapshot_and_compact_errors、snapshot_succeed_via_app_resp、replicate_pause、
+lagging_commit、progress_after_replication。
 
 ## Benchmark
 
@@ -170,7 +177,7 @@ JDK 17/21 矩阵 + 全 reactor `mvn install` + jacoco 汇总。本地跑 `mvn te
 ## 技术栈
 
 - Java 17
-- Protobuf 3.25（消息序列化）
+- Protobuf 4.35（消息序列化）
 - SLF4J + Logback（日志）
 - JUnit 5 + AssertJ（测试）
 - jqwik（property-based 测试）

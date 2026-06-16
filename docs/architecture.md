@@ -98,8 +98,8 @@ Each follower has a `Progress` tracker that manages:
 The `Storage` interface defines what the host must provide:
 
 ```java
-public interface Storage {
-    RaftState initialState();                    // recover HardState + ConfState
+public interface Storage extends AutoCloseable {
+    InitialStateResult initialState();           // recover HardState + ConfState
     List<Entry> entries(long lo, long hi, long maxSize);  // log range
     long term(long i);                           // term of entry i
     long lastIndex();

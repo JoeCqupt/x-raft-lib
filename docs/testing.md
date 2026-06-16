@@ -23,18 +23,18 @@ x-raft-lib employs a multi-layered testing strategy to verify Raft protocol corr
                 │ │ │  Datadriven │  Per-PR: scenario-driven
                 │ │ │   Tests     │  interaction tests
                 │ ├─┼─────────────┤
-                │ │ │    Unit     │  Per-PR: 448+ tests,
+                │ │ │    Unit     │  Per-PR: 396+ tests,
                 │ │ │   Tests     │  85%+ coverage
                 └─┴─┴─────────────┘
 ```
 
 | Layer | Count | Module | Runs |
 |-------|-------|--------|------|
-| Unit & functional tests | 448+ | raft-core | Every PR |
-| Property-based tests | ~10 | raft-core | Every PR |
-| Datadriven tests | 13 scenarios | raft-core | Every PR |
+| Unit & functional tests | 396+ | raft-core | Every PR |
+| Property-based tests | 11 | raft-core | Every PR |
+| Datadriven tests | 28 scenarios | raft-core | Every PR |
 | Fuzz tests | 2 harnesses | raft-core | Nightly |
-| Integration tests | 33+ | raft-tests | Every PR |
+| Integration tests | 25+ | raft-tests | Every PR |
 | Chaos stress | 6 test classes × 5 iterations | raft-tests | Weekly |
 | Soak tests | 2 | raft-tests | Weekly |
 
@@ -90,7 +90,7 @@ stabilize
 > 1 becomes leader
 ```
 
-Current scenarios: `single_node`, `three_node_election`, `partition_recovery`, `forget_leader`, `leader_transfer`, `confchange_v2_joint`, `prevote_no_term_bump`, `checkquorum_leader_steps_down`, `heartbeat_resp_recovers_from_probing`, `snapshot_install_after_compact`, `replicate_pause`, `lagging_commit`, `snapshot_succeed_via_app_resp`.
+Current 28 scenarios: `single_node`, `single_node_log_state`, `single_node_propose_batch`, `single_node_snapshot_compact`, `two_node_election`, `three_node_election`, `three_node_propose_replicate`, `partition_recovery`, `forget_leader`, `leader_transfer`, `confchange_v2_joint`, `confchange_add_learner`, `confchange_add_voter`, `confchange_demote_voter_to_learner`, `confchange_learner_lifecycle`, `confchange_promote_learner`, `confchange_remove_learner`, `confchange_remove_then_readd`, `confchange_remove_voter`, `prevote_no_term_bump`, `checkquorum_leader_steps_down`, `heartbeat_resp_recovers_from_probing`, `snapshot_install_after_compact`, `snapshot_and_compact_errors`, `snapshot_succeed_via_app_resp`, `replicate_pause`, `lagging_commit`, `progress_after_replication`.
 
 ### Rewrite Mode
 

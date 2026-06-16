@@ -81,19 +81,21 @@ the package boundary — depend only on `io.github.xinfra.lab.raft`.
 ## Quickstart (single-node, in-process)
 
 > The snippet below is illustrative. For a working multi-node demo see
-> [`KVCluster.java`](./src/test/java/io/github/xinfra/lab/raft/examples/KVCluster.java)
-> in tests.
+> [`KvClusterDemo.java`](../raft-examples/src/main/java/io/github/xinfra/lab/raft/examples/KvClusterDemo.java)
+> in raft-examples.
 
 ### `RawNode` — single-threaded
 
 ```java
-Config cfg = new Config();
-cfg.id = 1;
-cfg.electionTick = 10;
-cfg.heartbeatTick = 1;
-cfg.storage = new MemoryStorage();
-cfg.maxSizePerMsg = 64L * 1024;        // 64 KB per MsgApp
-cfg.maxInflightMsgs = 256;
+MemoryStorage storage = new MemoryStorage();
+Config cfg = Config.builder()
+        .id(1)
+        .electionTick(10)
+        .heartbeatTick(1)
+        .storage(storage)
+        .maxSizePerMsg(64L * 1024)        // 64 KB per MsgApp
+        .maxInflightMsgs(256)
+        .build();
 
 RawNode rn = RawNode.newRawNode(cfg);
 rn.bootstrap(List.of(new Peer(1)));
@@ -103,17 +105,13 @@ while (running) {
     for (Eraftpb.Message msg : received) rn.step(msg);      // inbound from transport
     if (rn.hasReady()) {
         Ready rd = rn.ready();
-        // 1. persist (HardState + entries) ATOMICALLY before sending
-        cfg.storage.append(rd.entries);
-        if (!Util.isEmptySnap(rd.snapshot)) {
-            cfg.storage.applySnapshot(rd.snapshot);
+        persist(rd.entries(), rd.hardState());                // 1. persist ATOMICALLY
+        if (!Util.isEmptySnap(rd.snapshot())) {
+            storage.applySnapshot(rd.snapshot());
         }
-        // 2. send messages over your transport
-        send(rd.messages);
-        // 3. apply committed entries to the state machine (must be idempotent)
-        apply(rd.committedEntries);
-        // 4. signal raft we are done with this Ready
-        rn.advance(rd);
+        send(rd.messages());                                 // 2. send messages
+        apply(rd.committedEntries());                        // 3. apply to state machine
+        rn.advance(rd);                                      // 4. signal done
     }
 }
 ```
@@ -133,9 +131,9 @@ n.transferLeadership(myId, targetId);
 // Single consumer drains Ready:
 while (running) {
     Ready rd = n.ready();
-    persist(rd.entries, rd.hardState);
-    send(rd.messages);
-    apply(rd.committedEntries);
+    persist(rd.entries(), rd.hardState());
+    send(rd.messages());
+    apply(rd.committedEntries());
     n.advance(rd);
 }
 
@@ -219,7 +217,9 @@ dependency:
   apply / confState watermarks).
 - [**raft-tests**](../raft-tests) — cross-module integration tests
   against real gRPC sockets + real RocksDB stores: single-node,
-  3-node cluster, restart-from-disk, leader failover.
+  3-node cluster, restart-from-disk, leader failover, leader transfer,
+  snapshot install, dynamic membership, partition recovery, chaos fault
+  injection, linearizability checking, soak stability.
 
 ## Contributing
 

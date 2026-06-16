@@ -98,8 +98,8 @@ API 包标注了 `@NullMarked`（JSpecify）：每个公开引用默认非空，
 `Storage` 接口定义上层必须提供的能力：
 
 ```java
-public interface Storage {
-    RaftState initialState();                    // 恢复 HardState + ConfState
+public interface Storage extends AutoCloseable {
+    InitialStateResult initialState();           // 恢复 HardState + ConfState
     List<Entry> entries(long lo, long hi, long maxSize);  // 日志范围查询
     long term(long i);                           // 条目 i 的任期
     long lastIndex();

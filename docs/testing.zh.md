@@ -23,18 +23,18 @@ x-raft-lib 采用多层测试策略，从算法不变量到全栈分布式场景
                 │ │ │  数据驱动   │  每次 PR：场景驱动
                 │ │ │   测试      │  交互测试
                 │ ├─┼─────────────┤
-                │ │ │   单元      │  每次 PR：448+ 测试，
+                │ │ │   单元      │  每次 PR：396+ 测试，
                 │ │ │   测试      │  85%+ 覆盖率
                 └─┴─┴─────────────┘
 ```
 
 | 层级 | 数量 | 模块 | 运行时机 |
 |------|------|------|----------|
-| 单元 & 功能测试 | 448+ | raft-core | 每次 PR |
-| 属性测试 | ~10 | raft-core | 每次 PR |
-| 数据驱动测试 | 13 个场景 | raft-core | 每次 PR |
+| 单元 & 功能测试 | 396+ | raft-core | 每次 PR |
+| 属性测试 | 11 | raft-core | 每次 PR |
+| 数据驱动测试 | 28 个场景 | raft-core | 每次 PR |
 | 模糊测试 | 2 个 harness | raft-core | 每夜 |
-| 集成测试 | 33+ | raft-tests | 每次 PR |
+| 集成测试 | 25+ | raft-tests | 每次 PR |
 | 混沌压力 | 6 个测试类 × 5 次迭代 | raft-tests | 每周 |
 | 浸泡测试 | 2 | raft-tests | 每周 |
 
@@ -90,7 +90,7 @@ stabilize
 > 1 becomes leader
 ```
 
-当前场景：`single_node`、`three_node_election`、`partition_recovery`、`forget_leader`、`leader_transfer`、`confchange_v2_joint`、`prevote_no_term_bump`、`checkquorum_leader_steps_down`、`heartbeat_resp_recovers_from_probing`、`snapshot_install_after_compact`、`replicate_pause`、`lagging_commit`、`snapshot_succeed_via_app_resp`。
+当前 28 个场景：`single_node`、`single_node_log_state`、`single_node_propose_batch`、`single_node_snapshot_compact`、`two_node_election`、`three_node_election`、`three_node_propose_replicate`、`partition_recovery`、`forget_leader`、`leader_transfer`、`confchange_v2_joint`、`confchange_add_learner`、`confchange_add_voter`、`confchange_demote_voter_to_learner`、`confchange_learner_lifecycle`、`confchange_promote_learner`、`confchange_remove_learner`、`confchange_remove_then_readd`、`confchange_remove_voter`、`prevote_no_term_bump`、`checkquorum_leader_steps_down`、`heartbeat_resp_recovers_from_probing`、`snapshot_install_after_compact`、`snapshot_and_compact_errors`、`snapshot_succeed_via_app_resp`、`replicate_pause`、`lagging_commit`、`progress_after_replication`。
 
 ### Rewrite 模式
 
