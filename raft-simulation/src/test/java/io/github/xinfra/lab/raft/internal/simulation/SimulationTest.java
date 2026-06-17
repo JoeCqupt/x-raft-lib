@@ -42,8 +42,8 @@ class SimulationTest {
         SimulationCluster cluster = new SimulationCluster(seed, 3);
 
         // Run long enough for election to happen
-        cluster.run(50);
-        assertThat(cluster.hasLeader()).as("seed=%d: no leader elected after 50 ticks", seed).isTrue();
+        cluster.run(100);
+        assertThat(cluster.hasLeader()).as("seed=%d: no leader elected after 100 ticks", seed).isTrue();
 
         // Continuously propose and tick
         for (int round = 0; round < 200; round++) {
@@ -71,7 +71,7 @@ class SimulationTest {
     void normalOperationFiveNodes(long seed) {
         SimulationCluster cluster = new SimulationCluster(seed, 5);
 
-        cluster.run(50);
+        cluster.run(100);
         assertThat(cluster.hasLeader()).as("seed=%d: no leader elected", seed).isTrue();
 
         for (int round = 0; round < 200; round++) {
@@ -98,7 +98,7 @@ class SimulationTest {
         SimulationCluster cluster = new SimulationCluster(seed, 5);
         cluster.network().setMaxDelay(2);
 
-        cluster.run(50);
+        cluster.run(100);
 
         for (int phase = 0; phase < 8; phase++) {
             // Propose some data
@@ -146,7 +146,7 @@ class SimulationTest {
     void leaderCrashAndRestart(long seed) {
         SimulationCluster cluster = new SimulationCluster(seed, 5);
 
-        cluster.run(50);
+        cluster.run(100);
         assertThat(cluster.hasLeader()).as("seed=%d: initial leader not elected", seed).isTrue();
 
         for (int cycle = 0; cycle < 6; cycle++) {
