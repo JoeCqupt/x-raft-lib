@@ -7,10 +7,12 @@
 package io.github.xinfra.lab.raft.examples;
 
 import com.google.protobuf.InvalidProtocolBufferException;
+import com.google.protobuf.ByteString;
 import io.github.xinfra.lab.raft.Config;
 import io.github.xinfra.lab.raft.Node;
 import io.github.xinfra.lab.raft.Peer;
 import io.github.xinfra.lab.raft.RaftException;
+import io.github.xinfra.lab.raft.ReadState;
 import io.github.xinfra.lab.raft.Ready;
 import io.github.xinfra.lab.raft.SnapshotStatus;
 import io.github.xinfra.lab.raft.Transport;
@@ -23,9 +25,13 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 /**
  * End-to-end glue: {@link Node} (raft-core) + {@link RocksDbStorage}
@@ -51,9 +57,12 @@ public class RaftPeer implements AutoCloseable {
     private final Thread applier;
     private final boolean snapshotStreaming;
     private volatile boolean running = true;
+    private final ConcurrentLinkedQueue<ReadState> pendingReadStates = new ConcurrentLinkedQueue<>();
 
     /** Apply callback fired for every committed normal entry. */
     private final BiConsumer<Long, byte[]> applier_cb;
+    /** Snapshot restore callback: receives the application snapshot data bytes. */
+    private final Consumer<byte[]> snapshotRestore_cb;
 
     public RaftPeer(long id,
                     int grpcPort,
@@ -61,27 +70,29 @@ public class RaftPeer implements AutoCloseable {
                     Map<Long, String> peerAddresses,
                     boolean bootstrap,
                     BiConsumer<Long, byte[]> applyCallback) throws Exception {
-        this(id, storageDir, peerAddresses, bootstrap, applyCallback,
+        this(id, storageDir, peerAddresses, bootstrap, applyCallback, data -> {},
                 new GrpcTransport(id, grpcPort));
     }
 
-    /**
-     * Constructor that accepts a pre-built {@link Transport} instead of
-     * building the default gRPC one, so tests (or alternative deployments)
-     * can inject a decorator — e.g. a fault-injecting "chaos" transport that
-     * wraps the real gRPC transport to drop/partition messages.
-     *
-     * <p>The supplied transport must NOT be started yet: this peer wires its
-     * receiver, registers peers, and calls {@code start()} on it.
-     */
     public RaftPeer(long id,
                     Path storageDir,
                     Map<Long, String> peerAddresses,
                     boolean bootstrap,
                     BiConsumer<Long, byte[]> applyCallback,
                     Transport transport) throws Exception {
+        this(id, storageDir, peerAddresses, bootstrap, applyCallback, data -> {}, transport);
+    }
+
+    public RaftPeer(long id,
+                    Path storageDir,
+                    Map<Long, String> peerAddresses,
+                    boolean bootstrap,
+                    BiConsumer<Long, byte[]> applyCallback,
+                    Consumer<byte[]> snapshotRestoreCallback,
+                    Transport transport) throws Exception {
         this.id = id;
         this.applier_cb = applyCallback;
+        this.snapshotRestore_cb = snapshotRestoreCallback;
         this.storage = new RocksDbStorage(storageDir);
         this.transport = transport;
 
@@ -166,6 +177,28 @@ public class RaftPeer implements AutoCloseable {
                 Ready rd = node.ready();
                 // 1. Persist (atomic Ready cycle).
                 storage.writeBatched(rd.entries(), rd.hardState(), rd.snapshot());
+
+                // 1b. If raft delivered a snapshot, restore the application state
+                // machine from its data. The snapshot arrives when a follower is
+                // too far behind for log-based catch-up (the leader's log has been
+                // compacted past the follower's match index).
+                if (rd.snapshot().getMetadata().getIndex() > 0) {
+                    byte[] appData;
+                    if (snapshotStreaming) {
+                        try (InputStream sin = storage.openSnapshotData(rd.snapshot())) {
+                            appData = sin.readAllBytes();
+                        } catch (IOException | RaftException e) {
+                            LOG.error("failed to read snapshot side-car data", e);
+                            appData = ByteString.EMPTY.toByteArray();
+                        }
+                    } else {
+                        appData = rd.snapshot().getData().toByteArray();
+                    }
+                    if (appData.length > 0) {
+                        snapshotRestore_cb.accept(appData);
+                    }
+                }
+
                 // 2. Send messages.
                 if (rd.messages() != null) {
                     for (Eraftpb.Message m : rd.messages()) {
@@ -210,7 +243,11 @@ public class RaftPeer implements AutoCloseable {
                         storage.setApplied(highestApplied);
                     }
                 }
-                // 4. Tell raft we're done with this Ready.
+                // 4. Surface ReadStates for linearizable reads.
+                if (rd.readStates() != null && !rd.readStates().isEmpty()) {
+                    pendingReadStates.addAll(rd.readStates());
+                }
+                // 5. Tell raft we're done with this Ready.
                 node.advance();
             }
         } catch (InterruptedException e) {
@@ -310,6 +347,15 @@ public class RaftPeer implements AutoCloseable {
             }
         }
         return snap;
+    }
+
+    public List<ReadState> drainReadStates() {
+        List<ReadState> result = new ArrayList<>();
+        ReadState rs;
+        while ((rs = pendingReadStates.poll()) != null) {
+            result.add(rs);
+        }
+        return result;
     }
 
     public Node.BasicStatus basicStatus() {

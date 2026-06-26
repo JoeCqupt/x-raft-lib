@@ -7,7 +7,8 @@
 package io.github.xinfra.lab.raft.tests;
 
 import io.github.xinfra.lab.raft.RaftException;
-import io.github.xinfra.lab.raft.examples.KvCommand;
+import com.google.protobuf.InvalidProtocolBufferException;
+import io.github.xinfra.lab.raft.examples.proto.KvCommand;
 import io.github.xinfra.lab.raft.examples.RaftPeer;
 import io.github.xinfra.lab.raft.tests.chaos.ChaosController;
 import io.github.xinfra.lab.raft.tests.linearizability.History;
@@ -180,18 +181,19 @@ class KvLinearizabilityIntegrationTest {
                                 String val = "v" + process + "-" + i;
                                 String cmdId = "p" + process + "-" + cmdSerial.incrementAndGet();
                                 long seq = history.invoke(process, History.OpType.PUT, key, val);
-                                proposeAndAwaitApply(nodes, KvCommand.put(key, val + "#" + cmdId), cmdId, applyFutures);
+                                proposeAndAwaitApply(nodes, KvCommand.newBuilder()
+                                        .setOp(KvCommand.Op.PUT).setKey(key).setValue(val + "#" + cmdId)
+                                        .build(), cmdId, applyFutures);
                                 history.complete(seq, process, History.OpType.PUT, key, val);
                             } else {
                                 String cmdId = "d" + process + "-" + cmdSerial.incrementAndGet();
                                 long seq = history.invoke(process, History.OpType.DELETE, key, null);
-                                proposeAndAwaitApply(nodes, KvCommand.delete(key + "#" + cmdId), cmdId, applyFutures);
-                                // The real delete is also issued (otherwise the
-                                // synthetic-keyed apply above would just touch
-                                // a side key). For a register we want the
-                                // canonical key's value gone.
-                                proposeAndAwaitApply(nodes, KvCommand.delete(key),
-                                        "real-" + cmdId, applyFutures);
+                                proposeAndAwaitApply(nodes, KvCommand.newBuilder()
+                                        .setOp(KvCommand.Op.DELETE).setKey(key + "#" + cmdId)
+                                        .build(), cmdId, applyFutures);
+                                proposeAndAwaitApply(nodes, KvCommand.newBuilder()
+                                        .setOp(KvCommand.Op.DELETE).setKey(key)
+                                        .build(), "real-" + cmdId, applyFutures);
                                 history.complete(seq, process, History.OpType.DELETE, key, null);
                             }
                         }
@@ -220,29 +222,32 @@ class KvLinearizabilityIntegrationTest {
      */
     private static void applyToState(Map<String, String> state, byte[] data,
                                      Map<String, CompletableFuture<Long>> applyFutures, long idx) {
-        KvCommand cmd = KvCommand.deserialize(data);
-        // Commands carry their canonical key + value; ids are appended in
-        // value (PUT) or key (DELETE) so the leader's apply can recover
-        // them and complete the matching future.
-        String canonicalKey = cmd.key;
-        String canonicalValue = cmd.value;
+        KvCommand cmd;
+        try {
+            cmd = KvCommand.parseFrom(data);
+        } catch (InvalidProtocolBufferException e) {
+            return;
+        }
+        String canonicalKey = cmd.getKey();
+        String canonicalValue = cmd.getValue();
         String idFromKey = null;
-        int kHash = canonicalKey == null ? -1 : canonicalKey.indexOf('#');
+        int kHash = canonicalKey.indexOf('#');
         if (kHash >= 0) {
             idFromKey = canonicalKey.substring(kHash + 1);
             canonicalKey = canonicalKey.substring(0, kHash);
         }
         String idFromVal = null;
-        if (canonicalValue != null) {
+        if (!canonicalValue.isEmpty()) {
             int vHash = canonicalValue.indexOf('#');
             if (vHash >= 0) {
                 idFromVal = canonicalValue.substring(vHash + 1);
                 canonicalValue = canonicalValue.substring(0, vHash);
             }
         }
-        switch (cmd.op) {
+        switch (cmd.getOp()) {
             case PUT -> state.put(canonicalKey, canonicalValue);
             case DELETE -> state.remove(canonicalKey);
+            default -> { }
         }
         String id = idFromVal != null ? idFromVal : idFromKey;
         if (id != null) {
@@ -305,7 +310,7 @@ class KvLinearizabilityIntegrationTest {
             RaftPeer leader = findLeader(nodes);
             if (leader != null) {
                 try {
-                    leader.propose(cmd.serialize());
+                    leader.propose(cmd.toByteArray());
                     return;
                 } catch (RaftException ignored) {
                     // dropped (e.g. lost leadership) — retry on the new leader

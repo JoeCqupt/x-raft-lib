@@ -6,58 +6,45 @@
  */
 package io.github.xinfra.lab.raft.examples;
 
+import io.github.xinfra.lab.raft.examples.proto.KvCommand;
 import org.rocksdb.Options;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
-/**
- * The demo's replicated state machine: a simple key-value store persisted
- * in its own RocksDB database.
- *
- * <p>This is deliberately separate from the {@code raft-storage-rocksdb}
- * store that holds the raft log / hard-state. That one is raft's business;
- * this one is the <em>application</em> data. Each {@link RaftPeer} owns one
- * of these and feeds it committed commands through its apply callback, so
- * after replication every node's RocksKvStore holds the same keys.
- *
- * <p>Durability note: this demo applies a command to RocksDB and then lets
- * {@link RaftPeer} persist raft's applied-index watermark separately. A
- * production system would commit the application write and the watermark in
- * one atomic batch (one fsync covering both) so a crash can't leave the two
- * out of sync.
- */
-public final class RocksKvStore implements AutoCloseable {
+public final class KvStateMachine implements AutoCloseable {
 
     static { RocksDB.loadLibrary(); }
 
     private final Options options;
     private final RocksDB db;
-    /** Highest raft index applied to this store; for observability only. */
     private volatile long appliedIndex;
 
-    public RocksKvStore(Path dir) {
+    public KvStateMachine(Path dir) {
         this.options = new Options().setCreateIfMissing(true);
         try {
+            Files.createDirectories(dir);
             this.db = RocksDB.open(options, dir.toString());
-        } catch (RocksDBException e) {
+        } catch (RocksDBException | IOException e) {
             options.close();
             throw new IllegalStateException("failed to open RocksDB at " + dir, e);
         }
     }
 
-    /** Apply one committed command at the given raft index. */
     public void apply(long index, KvCommand cmd) {
         try {
-            switch (cmd.op) {
-                case PUT -> db.put(bytes(cmd.key), bytes(cmd.value));
-                case DELETE -> db.delete(bytes(cmd.key));
+            switch (cmd.getOp()) {
+                case PUT -> db.put(bytes(cmd.getKey()), bytes(cmd.getValue()));
+                case DELETE -> db.delete(bytes(cmd.getKey()));
+                default -> { }
             }
         } catch (RocksDBException e) {
             throw new IllegalStateException("apply failed for " + cmd, e);
@@ -74,8 +61,7 @@ public final class RocksKvStore implements AutoCloseable {
         }
     }
 
-    /** A full snapshot of the store, key-ordered. Demo/inspection helper. */
-    public Map<String, String> snapshot() {
+    public Map<String, String> dumpAll() {
         Map<String, String> out = new LinkedHashMap<>();
         try (RocksIterator it = db.newIterator()) {
             for (it.seekToFirst(); it.isValid(); it.next()) {
@@ -86,12 +72,37 @@ public final class RocksKvStore implements AutoCloseable {
         return out;
     }
 
-    public int size() {
-        int n = 0;
+    public byte[] serializeState() {
+        StringBuilder sb = new StringBuilder();
         try (RocksIterator it = db.newIterator()) {
-            for (it.seekToFirst(); it.isValid(); it.next()) n++;
+            for (it.seekToFirst(); it.isValid(); it.next()) {
+                sb.append(new String(it.key(), StandardCharsets.UTF_8))
+                        .append('|')
+                        .append(new String(it.value(), StandardCharsets.UTF_8))
+                        .append('\n');
+            }
         }
-        return n;
+        return sb.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    public void restoreState(byte[] data) {
+        try (RocksIterator it = db.newIterator()) {
+            for (it.seekToFirst(); it.isValid(); it.next()) {
+                db.delete(it.key());
+            }
+        } catch (RocksDBException e) {
+            throw new IllegalStateException("clear failed during restore", e);
+        }
+        String s = new String(data, StandardCharsets.UTF_8);
+        for (String line : s.split("\n")) {
+            if (line.isEmpty()) continue;
+            String[] parts = line.split("\\|", 2);
+            try {
+                db.put(bytes(parts[0]), bytes(parts.length > 1 ? parts[1] : ""));
+            } catch (RocksDBException e) {
+                throw new IllegalStateException("restore put failed", e);
+            }
+        }
     }
 
     public long appliedIndex() { return appliedIndex; }
