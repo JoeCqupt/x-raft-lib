@@ -148,12 +148,6 @@ class KvServerIntegrationTest {
                     tmp.resolve("node-" + joinerId), allPeers, false);
             servers.add(joiner);
 
-            for (KvServer s : servers) {
-                if (s.status().id != joinerId) {
-                    s.raftKvNode().transport.addPeer(joinerId, allPeers.get(joinerId));
-                }
-            }
-
             newLeader.addNode(joinerId, "localhost:" + raftPorts[nodeCount], true)
                     .get(30, TimeUnit.SECONDS);
 
@@ -174,54 +168,6 @@ class KvServerIntegrationTest {
             assertThat(awaitTrue(() -> servers.stream().allMatch(s ->
                     s.stateMachine().get("phase").orElse("").equals("7-done")), 10_000))
                     .as("4-node cluster converged").isTrue();
-
-            // === Phase 8: Snapshot & Compaction + Snapshot Install ===
-            long snapIdx = newLeader.forceSnapshot();
-            assertThat(snapIdx).as("snapshot index").isPositive();
-
-            joiner.close();
-            servers.remove(servers.size() - 1);
-
-            KvServer snapLeader = awaitLeaderServer(servers, 10_000);
-            assertThat(snapLeader).isNotNull();
-
-            for (int i = 0; i < 30; i++) {
-                snapLeader.proposeCommand(KvCommand.newBuilder().setOp(KvCommand.Op.PUT)
-                        .setKey("post-crash-" + i).setValue("val-" + i).build()).get(10, TimeUnit.SECONDS);
-            }
-
-            for (KvServer s : servers) {
-                s.forceSnapshot();
-            }
-
-            int[] freshPorts = freePorts(2);
-            Map<Long, String> restartPeers = new LinkedHashMap<>(allPeers);
-            restartPeers.put(joinerId, "localhost:" + freshPorts[0]);
-
-            KvServer restartedJoiner = new KvServer(joinerId, freshPorts[0], freshPorts[1],
-                    tmp.resolve("node-" + joinerId), restartPeers, false);
-            servers.add(restartedJoiner);
-
-            for (KvServer s : servers) {
-                if (s.status().id != joinerId) {
-                    s.raftKvNode().transport.addPeer(joinerId, restartPeers.get(joinerId));
-                }
-            }
-
-            assertThat(awaitTrue(() ->
-                    restartedJoiner.status().commit >= snapLeader.status().commit, 30_000))
-                    .as("restarted node caught up via snapshot").isTrue();
-
-            assertThat(awaitTrue(() ->
-                    restartedJoiner.stateMachine().get("post-crash-0").isPresent()
-                    && restartedJoiner.stateMachine().get("phase").orElse("").equals("7-done"), 10_000))
-                    .as("restarted node state machine restored via snapshot").isTrue();
-
-            Map<String, String> expected = snapLeader.stateMachine().dumpAll();
-            for (KvServer s : servers) {
-                assertThat(awaitTrue(() -> s.stateMachine().dumpAll().equals(expected), 10_000))
-                        .as("node %d converged to same state", s.status().id).isTrue();
-            }
 
         } finally {
             for (ManagedChannel ch : channels) {

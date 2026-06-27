@@ -7,9 +7,6 @@
 package io.github.xinfra.lab.raft.tests;
 
 import io.github.xinfra.lab.raft.RaftException;
-import com.google.protobuf.InvalidProtocolBufferException;
-import io.github.xinfra.lab.raft.examples.proto.KvCommand;
-import io.github.xinfra.lab.raft.examples.RaftKVNode;
 import io.github.xinfra.lab.raft.tests.chaos.ChaosController;
 import io.github.xinfra.lab.raft.tests.linearizability.History;
 import io.github.xinfra.lab.raft.tests.linearizability.LinearizabilityChecker;
@@ -106,7 +103,7 @@ class KvLinearizabilityIntegrationTest {
         // applied" rather than "merely accepted by propose()".
         Map<String, CompletableFuture<Long>> applyFutures = new ConcurrentHashMap<>();
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
@@ -151,7 +148,7 @@ class KvLinearizabilityIntegrationTest {
      * that by tagging each command with a unique id, registering a
      * future, and waiting for the apply callback to complete it.
      */
-    private History runMixedWorkload(List<RaftKVNode> nodes,
+    private History runMixedWorkload(List<TestRaftNode> nodes,
                                      Map<Long, Map<String, String>> nodeStates,
                                      Map<Long, AtomicLong> appliedHigh,
                                      Map<String, CompletableFuture<Long>> applyFutures) throws Exception {
@@ -181,19 +178,16 @@ class KvLinearizabilityIntegrationTest {
                                 String val = "v" + process + "-" + i;
                                 String cmdId = "p" + process + "-" + cmdSerial.incrementAndGet();
                                 long seq = history.invoke(process, History.OpType.PUT, key, val);
-                                proposeAndAwaitApply(nodes, KvCommand.newBuilder()
-                                        .setOp(KvCommand.Op.PUT).setKey(key).setValue(val + "#" + cmdId)
-                                        .build(), cmdId, applyFutures);
+                                String cmd = "PUT:" + key + ":" + val + "#" + cmdId;
+                                proposeAndAwaitApply(nodes, cmd, cmdId, applyFutures);
                                 history.complete(seq, process, History.OpType.PUT, key, val);
                             } else {
                                 String cmdId = "d" + process + "-" + cmdSerial.incrementAndGet();
                                 long seq = history.invoke(process, History.OpType.DELETE, key, null);
-                                proposeAndAwaitApply(nodes, KvCommand.newBuilder()
-                                        .setOp(KvCommand.Op.DELETE).setKey(key + "#" + cmdId)
-                                        .build(), cmdId, applyFutures);
-                                proposeAndAwaitApply(nodes, KvCommand.newBuilder()
-                                        .setOp(KvCommand.Op.DELETE).setKey(key)
-                                        .build(), "real-" + cmdId, applyFutures);
+                                String cmd1 = "DELETE:" + key + "#" + cmdId;
+                                proposeAndAwaitApply(nodes, cmd1, cmdId, applyFutures);
+                                String cmd2 = "DELETE:" + key;
+                                proposeAndAwaitApply(nodes, cmd2, "real-" + cmdId, applyFutures);
                                 history.complete(seq, process, History.OpType.DELETE, key, null);
                             }
                         }
@@ -222,36 +216,35 @@ class KvLinearizabilityIntegrationTest {
      */
     private static void applyToState(Map<String, String> state, byte[] data,
                                      Map<String, CompletableFuture<Long>> applyFutures, long idx) {
-        KvCommand cmd;
-        try {
-            cmd = KvCommand.parseFrom(data);
-        } catch (InvalidProtocolBufferException e) {
-            return;
-        }
-        String canonicalKey = cmd.getKey();
-        String canonicalValue = cmd.getValue();
-        String idFromKey = null;
-        int kHash = canonicalKey.indexOf('#');
-        if (kHash >= 0) {
-            idFromKey = canonicalKey.substring(kHash + 1);
-            canonicalKey = canonicalKey.substring(0, kHash);
-        }
-        String idFromVal = null;
-        if (!canonicalValue.isEmpty()) {
-            int vHash = canonicalValue.indexOf('#');
-            if (vHash >= 0) {
-                idFromVal = canonicalValue.substring(vHash + 1);
-                canonicalValue = canonicalValue.substring(0, vHash);
+        String raw = new String(data, java.nio.charset.StandardCharsets.UTF_8);
+        int firstColon = raw.indexOf(':');
+        if (firstColon < 0) return;
+        String op = raw.substring(0, firstColon);
+        String rest = raw.substring(firstColon + 1);
+
+        String cmdId = null;
+        if ("PUT".equals(op)) {
+            int secondColon = rest.indexOf(':');
+            if (secondColon < 0) return;
+            String key = rest.substring(0, secondColon);
+            String value = rest.substring(secondColon + 1);
+            int hash = value.indexOf('#');
+            if (hash >= 0) {
+                cmdId = value.substring(hash + 1);
+                value = value.substring(0, hash);
             }
+            state.put(key, value);
+        } else if ("DELETE".equals(op)) {
+            String key = rest;
+            int hash = key.indexOf('#');
+            if (hash >= 0) {
+                cmdId = key.substring(hash + 1);
+                key = key.substring(0, hash);
+            }
+            state.remove(key);
         }
-        switch (cmd.getOp()) {
-            case PUT -> state.put(canonicalKey, canonicalValue);
-            case DELETE -> state.remove(canonicalKey);
-            default -> { }
-        }
-        String id = idFromVal != null ? idFromVal : idFromKey;
-        if (id != null) {
-            CompletableFuture<Long> f = applyFutures.get(id);
+        if (cmdId != null) {
+            CompletableFuture<Long> f = applyFutures.get(cmdId);
             if (f != null) f.complete(idx);
         }
     }
@@ -265,11 +258,11 @@ class KvLinearizabilityIntegrationTest {
      * spurious linearizability violations against an asynchronous
      * apply log.)
      */
-    private static String readAfterCatchUp(List<RaftKVNode> nodes,
+    private static String readAfterCatchUp(List<TestRaftNode> nodes,
                                            Map<Long, Map<String, String>> nodeStates,
                                            Map<Long, AtomicLong> appliedHigh,
                                            String key) throws InterruptedException {
-        RaftKVNode leader = findLeader(nodes);
+        TestRaftNode leader = findLeader(nodes);
         if (leader == null) return null;
         long target = leader.basicStatus().commit;
         AtomicLong applied = appliedHigh.get(leader.id);
@@ -288,8 +281,8 @@ class KvLinearizabilityIntegrationTest {
      * subsequent GET could legitimately observe the old value, breaking
      * linearizability under the per-client real-time order.
      */
-    private static void proposeAndAwaitApply(List<RaftKVNode> nodes,
-                                             KvCommand cmd,
+    private static void proposeAndAwaitApply(List<TestRaftNode> nodes,
+                                             String cmd,
                                              String cmdId,
                                              Map<String, CompletableFuture<Long>> applyFutures)
             throws InterruptedException, TimeoutException, ExecutionException {
@@ -303,25 +296,23 @@ class KvLinearizabilityIntegrationTest {
         }
     }
 
-    /** Retry propose across leader changes. */
-    private static void proposeOnLeader(List<RaftKVNode> nodes, KvCommand cmd) throws InterruptedException {
+    private static void proposeOnLeader(List<TestRaftNode> nodes, String cmd) throws InterruptedException {
+        byte[] data = cmd.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         long deadline = System.currentTimeMillis() + 10_000;
         while (System.currentTimeMillis() < deadline) {
-            RaftKVNode leader = findLeader(nodes);
+            TestRaftNode leader = findLeader(nodes);
             if (leader != null) {
                 try {
-                    leader.propose(cmd.toByteArray());
+                    leader.propose(data);
                     return;
-                } catch (RaftException ignored) {
-                    // dropped (e.g. lost leadership) — retry on the new leader
-                }
+                } catch (RaftException ignored) {}
             }
             Thread.sleep(20);
         }
         throw new IllegalStateException("could not propose within timeout");
     }
 
-    private static void closeAll(List<RaftKVNode> nodes) {
+    private static void closeAll(List<TestRaftNode> nodes) {
         for (int i = nodes.size() - 1; i >= 0; i--) {
             try { nodes.get(i).close(); } catch (Throwable ignored) {}
         }

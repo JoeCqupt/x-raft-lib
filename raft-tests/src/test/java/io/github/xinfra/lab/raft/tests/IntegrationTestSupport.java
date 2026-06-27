@@ -7,12 +7,15 @@
 package io.github.xinfra.lab.raft.tests;
 
 import io.github.xinfra.lab.raft.Node;
+import io.github.xinfra.lab.raft.RaftException;
 import io.github.xinfra.lab.raft.RaftStateType;
-import io.github.xinfra.lab.raft.examples.RaftKVNode;
+
+import io.github.xinfra.lab.raft.proto.Eraftpb;
 import io.github.xinfra.lab.raft.tests.chaos.ChaosController;
 import io.github.xinfra.lab.raft.tests.chaos.ChaosTransport;
 import io.github.xinfra.lab.raft.transport.grpc.GrpcTransport;
 
+import java.io.IOException;
 import java.net.ServerSocket;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
@@ -69,10 +72,10 @@ final class IntegrationTestSupport {
     }
 
     /** Wait until at least one peer is in StateLeader; returns its id, or 0 on timeout. */
-    static long awaitLeader(Iterable<RaftKVNode> peers, long timeoutMillis) throws InterruptedException {
+    static long awaitLeader(Iterable<TestRaftNode> peers, long timeoutMillis) throws InterruptedException {
         AtomicLong leader = new AtomicLong();
         boolean ok = awaitTrue(() -> {
-            for (RaftKVNode p : peers) {
+            for (TestRaftNode p : peers) {
                 if (p.basicStatus().state == RaftStateType.StateLeader) {
                     leader.set(p.id);
                     return true;
@@ -84,12 +87,12 @@ final class IntegrationTestSupport {
     }
 
     /**
-     * Build a {@link RaftKVNode} whose gRPC transport is wrapped in a
+     * Build a {@link TestRaftNode} whose gRPC transport is wrapped in a
      * {@link ChaosTransport} sharing {@code controller}, so the test can drop
      * / partition this node's traffic. {@code ports} is the full cluster's
      * port array; this node's port is {@code ports[id-1]}.
      */
-    static RaftKVNode chaosPeer(long id,
+    static TestRaftNode chaosPeer(long id,
                               int[] ports,
                               Map<Long, String> peerAddresses,
                               Path storageDir,
@@ -98,12 +101,12 @@ final class IntegrationTestSupport {
                               ChaosController controller) throws Exception {
         GrpcTransport inner = new GrpcTransport(id, ports[(int) (id - 1)]);
         ChaosTransport chaos = new ChaosTransport(id, inner, controller);
-        return new RaftKVNode(id, storageDir, peerAddresses, bootstrap, applyCallback, chaos);
+        return new TestRaftNode(id, storageDir, peerAddresses, bootstrap, applyCallback, chaos);
     }
 
     /** Find the (single, best-effort) peer currently reporting StateLeader, or null. */
-    static RaftKVNode findLeader(Iterable<RaftKVNode> peers) {
-        for (RaftKVNode p : peers) {
+    static TestRaftNode findLeader(Iterable<TestRaftNode> peers) {
+        for (TestRaftNode p : peers) {
             if (p.basicStatus().state == RaftStateType.StateLeader) return p;
         }
         return null;
@@ -118,10 +121,10 @@ final class IntegrationTestSupport {
      * snapshot returns null at that exact instant, which then NPEs the
      * caller — this helper waits past the gap.
      */
-    static RaftKVNode findLeaderOrWait(Iterable<RaftKVNode> peers, long waitMillis) throws InterruptedException {
+    static TestRaftNode findLeaderOrWait(Iterable<TestRaftNode> peers, long waitMillis) throws InterruptedException {
         long deadline = System.currentTimeMillis() + waitMillis;
         while (true) {
-            RaftKVNode p = findLeader(peers);
+            TestRaftNode p = findLeader(peers);
             if (p != null) return p;
             if (System.currentTimeMillis() >= deadline) return null;
             Thread.sleep(20);
@@ -129,10 +132,10 @@ final class IntegrationTestSupport {
     }
 
     /** Wait until the basicStatus().lead converges to a single non-zero value across all peers. */
-    static boolean awaitConvergedLeader(Iterable<RaftKVNode> peers, long timeoutMillis) throws InterruptedException {
+    static boolean awaitConvergedLeader(Iterable<TestRaftNode> peers, long timeoutMillis) throws InterruptedException {
         return awaitTrue(() -> {
             long lead = -1;
-            for (RaftKVNode p : peers) {
+            for (TestRaftNode p : peers) {
                 Node.BasicStatus s = p.basicStatus();
                 if (s.lead == 0) return false;
                 if (lead == -1) lead = s.lead;
@@ -140,5 +143,28 @@ final class IntegrationTestSupport {
             }
             return lead > 0;
         }, timeoutMillis);
+    }
+
+    static Eraftpb.Snapshot forceSnapshotAndCompact(TestRaftNode p, byte[] snapshotData) throws RaftException {
+        long applied = p.node.basicStatus().applied;
+        if (applied == 0) return null;
+        Eraftpb.ConfState cs = p.storage.initialState().confState();
+        final byte[] data = snapshotData == null ? new byte[0] : snapshotData;
+        Eraftpb.Snapshot snap;
+        if (p.storage.supportsStreamingSnapshot() && p.transport.supportsSnapshotStreaming()) {
+            try {
+                snap = p.storage.createSnapshotStreaming(applied, cs, out -> out.write(data));
+            } catch (IOException e) {
+                throw new RaftException(RaftException.Code.UNAVAILABLE, "streaming snapshot create failed", e);
+            }
+        } else {
+            snap = p.storage.createSnapshot(applied, cs, data);
+        }
+        try {
+            p.storage.compact(applied);
+        } catch (RaftException e) {
+            if (e.code() != RaftException.Code.COMPACTED) throw e;
+        }
+        return snap;
     }
 }

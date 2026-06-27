@@ -6,7 +6,7 @@
  */
 package io.github.xinfra.lab.raft.tests;
 
-import io.github.xinfra.lab.raft.examples.RaftKVNode;
+
 import io.github.xinfra.lab.raft.proto.Eraftpb;
 import io.github.xinfra.lab.raft.tests.chaos.ChaosController;
 import org.junit.jupiter.api.Test;
@@ -46,7 +46,7 @@ class ConfChangeCrashIntegrationTest {
         Map<Long, String> allPeers = peerMap(ports);
         ChaosController chaos = new ChaosController();
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             // Bootstrap 3-node cluster.
             for (long id = 1; id <= 3; id++) {
@@ -56,7 +56,7 @@ class ConfChangeCrashIntegrationTest {
             }
             long leaderId = awaitLeader(nodes, 10_000);
             assertThat(leaderId).isPositive();
-            RaftKVNode leader = findLeader(nodes);
+            TestRaftNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
 
             // Commit some seed entries.
@@ -66,10 +66,10 @@ class ConfChangeCrashIntegrationTest {
                     10_000)).isTrue();
 
             // Start node 4 (non-bootstrap, empty storage).
-            RaftKVNode joiner = chaosPeer(4L, ports, allPeers, tmp.resolve("p4"), false,
+            TestRaftNode joiner = chaosPeer(4L, ports, allPeers, tmp.resolve("p4"), false,
                     (idx, data) -> { }, chaos);
             nodes.add(joiner);
-            for (RaftKVNode p : nodes) {
+            for (TestRaftNode p : nodes) {
                 if (p.id != 4L) p.transport.addPeer(4L, allPeers.get(4L));
             }
 
@@ -86,7 +86,7 @@ class ConfChangeCrashIntegrationTest {
             // follower (commit advances), then crash. This simulates a leader
             // that crashes after replication but before it can fully process
             // the new configuration — the surviving majority completes it.
-            RaftKVNode fLeader = leader;
+            TestRaftNode fLeader = leader;
             awaitTrue(() -> fLeader.basicStatus().commit > commitBeforeCC, 10_000);
 
             // Crash the leader.
@@ -96,21 +96,21 @@ class ConfChangeCrashIntegrationTest {
 
             // The surviving nodes must elect a new leader.
             assertThat(awaitTrue(() -> {
-                RaftKVNode l = findLeader(nodes);
+                TestRaftNode l = findLeader(nodes);
                 return l != null && l.id != crashedId;
             }, 20_000)).as("new leader must emerge after crash").isTrue();
 
             // Wait for the conf change to be applied — node 4 should appear
             // in the voter set of the new leader.
             assertThat(awaitTrue(() -> {
-                RaftKVNode l = findLeader(nodes);
+                TestRaftNode l = findLeader(nodes);
                 if (l == null) return false;
                 List<Long> voters = l.storage.initialState().confState().getVotersList();
                 return voters.contains(4L);
             }, 25_000)).as("node 4 must become a voter").isTrue();
 
             // The cluster (now 3 survivors of 4 voters) can commit new proposals.
-            RaftKVNode newLeader = findLeaderOrWait(nodes, 10_000);
+            TestRaftNode newLeader = findLeaderOrWait(nodes, 10_000);
             assertThat(newLeader).isNotNull();
             long pre = newLeader.basicStatus().commit;
             for (int i = 0; i < 5; i++) newLeader.propose(("after-crash-" + i).getBytes());
@@ -133,7 +133,7 @@ class ConfChangeCrashIntegrationTest {
         Map<Long, String> allPeers = peerMap(ports);
         ChaosController chaos = new ChaosController();
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             // Bootstrap 3-node cluster.
             for (long id = 1; id <= 3; id++) {
@@ -145,14 +145,14 @@ class ConfChangeCrashIntegrationTest {
 
             // Scale up: add nodes 4 and 5.
             for (long newId = 4; newId <= 5; newId++) {
-                RaftKVNode joiner = chaosPeer(newId, ports, allPeers, tmp.resolve("p" + newId), false,
+                TestRaftNode joiner = chaosPeer(newId, ports, allPeers, tmp.resolve("p" + newId), false,
                         (idx, data) -> { }, chaos);
                 nodes.add(joiner);
-                for (RaftKVNode p : nodes) {
+                for (TestRaftNode p : nodes) {
                     if (p.id != newId) p.transport.addPeer(newId, allPeers.get(newId));
                 }
 
-                RaftKVNode leader = findLeaderOrWait(nodes, 10_000);
+                TestRaftNode leader = findLeaderOrWait(nodes, 10_000);
                 assertThat(leader).isNotNull();
                 Eraftpb.ConfChangeV2 cc = Eraftpb.ConfChangeV2.newBuilder()
                         .addChanges(Eraftpb.ConfChangeSingle.newBuilder()
@@ -163,14 +163,14 @@ class ConfChangeCrashIntegrationTest {
 
                 long fNewId = newId;
                 assertThat(awaitTrue(() -> {
-                    RaftKVNode l = findLeader(nodes);
+                    TestRaftNode l = findLeader(nodes);
                     if (l == null) return false;
                     return l.storage.initialState().confState().getVotersList().contains(fNewId);
                 }, 20_000)).as("node %d must become a voter", newId).isTrue();
             }
 
             // 5-voter cluster commits proposals.
-            RaftKVNode leader5 = findLeaderOrWait(nodes, 10_000);
+            TestRaftNode leader5 = findLeaderOrWait(nodes, 10_000);
             assertThat(leader5).isNotNull();
             long pre5 = leader5.basicStatus().commit;
             for (int i = 0; i < 5; i++) leader5.propose(("five-" + i).getBytes());
@@ -180,7 +180,7 @@ class ConfChangeCrashIntegrationTest {
 
             // Scale down: remove nodes 5 and 4.
             for (long removeId = 5; removeId >= 4; removeId--) {
-                RaftKVNode leader = findLeaderOrWait(nodes, 10_000);
+                TestRaftNode leader = findLeaderOrWait(nodes, 10_000);
                 assertThat(leader).isNotNull();
                 Eraftpb.ConfChangeV2 cc = Eraftpb.ConfChangeV2.newBuilder()
                         .addChanges(Eraftpb.ConfChangeSingle.newBuilder()
@@ -191,7 +191,7 @@ class ConfChangeCrashIntegrationTest {
 
                 long fRemoveId = removeId;
                 assertThat(awaitTrue(() -> {
-                    RaftKVNode l = findLeader(nodes);
+                    TestRaftNode l = findLeader(nodes);
                     if (l == null) return false;
                     List<Long> voters = l.storage.initialState().confState().getVotersList();
                     return !voters.contains(fRemoveId);
@@ -199,7 +199,7 @@ class ConfChangeCrashIntegrationTest {
             }
 
             // 3-voter cluster (nodes 1-3) still commits.
-            RaftKVNode leader3 = findLeaderOrWait(nodes, 10_000);
+            TestRaftNode leader3 = findLeaderOrWait(nodes, 10_000);
             assertThat(leader3).isNotNull();
             long pre3 = leader3.basicStatus().commit;
             for (int i = 0; i < 5; i++) leader3.propose(("three-" + i).getBytes());
@@ -213,7 +213,7 @@ class ConfChangeCrashIntegrationTest {
         }
     }
 
-    private static void closeAll(List<RaftKVNode> nodes) {
+    private static void closeAll(List<TestRaftNode> nodes) {
         for (int i = nodes.size() - 1; i >= 0; i--) {
             try { nodes.get(i).close(); } catch (Throwable ignored) {}
         }

@@ -50,7 +50,7 @@ The API package is `@NullMarked` (JSpecify): every public reference is non-null 
 | **raft-core** | Pure Raft state machine: election, replication, conf change, ReadIndex, snapshot, Ready loop | raft-proto |
 | **raft-transport-grpc** | gRPC Transport: message delivery, snapshot streaming, TLS/mTLS | raft-core, grpc-netty-shaded |
 | **raft-storage-rocksdb** | RocksDB Storage: atomic log persistence, snapshot management | raft-core, rocksdbjni |
-| **raft-examples** | End-to-end KV demo: `RaftPeer` glue + `RocksKvStore` state machine | all above |
+| **raft-examples** | Production-quality KV server: `RaftKVNode` glue + `KvStateMachine` state machine | all above |
 | **raft-tests** | Cross-module integration & chaos test suite | all above |
 
 ## Core Internals

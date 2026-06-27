@@ -16,7 +16,6 @@ service KvAdminService {
     rpc RemoveNode(RemoveNodeRequest) returns (RemoveNodeResponse);
     rpc TransferLeader(TransferLeaderRequest) returns (TransferLeaderResponse);
     rpc GetClusterInfo(GetClusterInfoRequest) returns (GetClusterInfoResponse);
-    rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
 }
 
 message AddNodeRequest {
@@ -50,10 +49,4 @@ message GetClusterInfoResponse {
     uint64 applied = 6;
     repeated uint64 voters = 7;
     repeated uint64 learners = 8;
-}
-
-message SnapshotRequest {}
-
-message SnapshotResponse {
-    uint64 snapshot_index = 1;
 }

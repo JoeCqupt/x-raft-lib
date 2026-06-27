@@ -6,7 +6,7 @@
  */
 package io.github.xinfra.lab.raft.tests;
 
-import io.github.xinfra.lab.raft.examples.RaftKVNode;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -46,17 +46,17 @@ class MultiNodeRestartIntegrationTest {
         long phase1Commit;
         long phase1Applied;
         {
-            List<RaftKVNode> nodes = new ArrayList<>();
+            List<TestRaftNode> nodes = new ArrayList<>();
             try {
                 for (long id = 1; id <= 3; id++) {
                     long fid = id;
-                    nodes.add(new RaftKVNode(fid, ports1[(int) (fid - 1)],
+                    nodes.add(new TestRaftNode(fid, ports1[(int) (fid - 1)],
                             storageDirs[(int) (fid - 1)], peers1, true,
                             (idx, data) -> phase1Apply.get(fid).add(new String(data))));
                 }
 
                 assertThat(awaitLeader(nodes, 10_000)).as("phase1 leader").isPositive();
-                RaftKVNode leader = findLeader(nodes);
+                TestRaftNode leader = findLeader(nodes);
                 assertThat(leader).isNotNull();
 
                 for (int i = 0; i < 10; i++) leader.propose(("v" + i).getBytes());
@@ -77,11 +77,11 @@ class MultiNodeRestartIntegrationTest {
         Map<Long, ConcurrentLinkedQueue<String>> phase2Apply = new ConcurrentHashMap<>();
         for (long id = 1; id <= 3; id++) phase2Apply.put(id, new ConcurrentLinkedQueue<>());
 
-        List<RaftKVNode> nodes2 = new ArrayList<>();
+        List<TestRaftNode> nodes2 = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
-                nodes2.add(new RaftKVNode(fid, ports2[(int) (fid - 1)],
+                nodes2.add(new TestRaftNode(fid, ports2[(int) (fid - 1)],
                         storageDirs[(int) (fid - 1)], peers2, false,
                         (idx, data) -> phase2Apply.get(fid).add(new String(data))));
             }
@@ -89,7 +89,7 @@ class MultiNodeRestartIntegrationTest {
             assertThat(awaitLeader(nodes2, 15_000)).as("phase2 leader elected").isPositive();
 
             // Recovered state must be at least where we left off.
-            for (RaftKVNode p : nodes2) {
+            for (TestRaftNode p : nodes2) {
                 assertThat(awaitTrue(
                         () -> p.basicStatus().commit >= phase1Commit, 10_000))
                         .as("node %d commit must recover to >= %d", p.id, phase1Commit).isTrue();
@@ -103,7 +103,7 @@ class MultiNodeRestartIntegrationTest {
             }
 
             // New proposals work.
-            RaftKVNode leader2 = findLeader(nodes2);
+            TestRaftNode leader2 = findLeader(nodes2);
             assertThat(leader2).isNotNull();
             for (int i = 0; i < 5; i++) leader2.propose(("post-" + i).getBytes());
             assertThat(awaitTrue(
@@ -122,17 +122,17 @@ class MultiNodeRestartIntegrationTest {
         Map<Long, ConcurrentLinkedQueue<String>> applyLogs = new ConcurrentHashMap<>();
         for (long id = 1; id <= 3; id++) applyLogs.put(id, new ConcurrentLinkedQueue<>());
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
-                nodes.add(new RaftKVNode(fid, ports[(int) (fid - 1)],
+                nodes.add(new TestRaftNode(fid, ports[(int) (fid - 1)],
                         storageDirs[(int) (fid - 1)], peers, true,
                         (idx, data) -> applyLogs.get(fid).add(new String(data))));
             }
 
             assertThat(awaitLeader(nodes, 10_000)).isPositive();
-            RaftKVNode leader = findLeader(nodes);
+            TestRaftNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
 
             for (int i = 0; i < 5; i++) leader.propose(("pre-" + i).getBytes());
@@ -141,7 +141,7 @@ class MultiNodeRestartIntegrationTest {
                     15_000)).isTrue();
 
             // Kill nodes 2 and 3 — node 1 is the sole survivor.
-            RaftKVNode survivor = nodes.get(0);
+            TestRaftNode survivor = nodes.get(0);
             nodes.get(1).close();
             nodes.get(2).close();
 
@@ -161,14 +161,14 @@ class MultiNodeRestartIntegrationTest {
 
             ConcurrentLinkedQueue<String> apply2 = new ConcurrentLinkedQueue<>();
             ConcurrentLinkedQueue<String> apply3 = new ConcurrentLinkedQueue<>();
-            RaftKVNode node2 = new RaftKVNode(2L, storageDirs[1], newPeers, false,
+            TestRaftNode node2 = new TestRaftNode(2L, storageDirs[1], newPeers, false,
                     (idx, data) -> apply2.add(new String(data)),
                     new io.github.xinfra.lab.raft.transport.grpc.GrpcTransport(2L, freshPorts[0]));
-            RaftKVNode node3 = new RaftKVNode(3L, storageDirs[2], newPeers, false,
+            TestRaftNode node3 = new TestRaftNode(3L, storageDirs[2], newPeers, false,
                     (idx, data) -> apply3.add(new String(data)),
                     new io.github.xinfra.lab.raft.transport.grpc.GrpcTransport(3L, freshPorts[1]));
 
-            List<RaftKVNode> allNodes = List.of(survivor, node2, node3);
+            List<TestRaftNode> allNodes = List.of(survivor, node2, node3);
             nodes.clear();
             nodes.addAll(allNodes);
 
@@ -177,7 +177,7 @@ class MultiNodeRestartIntegrationTest {
             assertThat(awaitConvergedLeader(allNodes, 15_000)).isTrue();
 
             // New proposals commit on all 3.
-            RaftKVNode newLeader = findLeader(allNodes);
+            TestRaftNode newLeader = findLeader(allNodes);
             assertThat(newLeader).isNotNull();
             for (int i = 0; i < 5; i++) newLeader.propose(("post-" + i).getBytes());
 
@@ -189,11 +189,11 @@ class MultiNodeRestartIntegrationTest {
         }
     }
 
-    private static boolean awaitConvergedLeader(Iterable<RaftKVNode> peers, long timeoutMillis) throws InterruptedException {
+    private static boolean awaitConvergedLeader(Iterable<TestRaftNode> peers, long timeoutMillis) throws InterruptedException {
         return IntegrationTestSupport.awaitConvergedLeader(peers, timeoutMillis);
     }
 
-    private static void closeAll(List<RaftKVNode> nodes) {
+    private static void closeAll(List<TestRaftNode> nodes) {
         for (int i = nodes.size() - 1; i >= 0; i--) {
             try { nodes.get(i).close(); } catch (Throwable ignored) {}
         }

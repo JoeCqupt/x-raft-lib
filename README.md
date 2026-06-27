@@ -30,7 +30,7 @@ production-grade gRPC and RocksDB modules ship alongside.
 | [**raft-core**](raft-core) | Pure Raft state machine. Zero I/O, zero network, zero clock. The host drives ticks and the Ready/Advance loop, supplies Storage, supplies Transport. |
 | [**raft-transport-grpc**](raft-transport-grpc) | gRPC `Transport` implementation. Unary RPC for the hot path, client-streaming for snapshots, TLS / mTLS support. |
 | [**raft-storage-rocksdb**](raft-storage-rocksdb) | RocksDB `Storage` implementation. Atomic per-Ready-cycle persistence via `WriteBatch`; out-of-band side-car file for streaming snapshots. |
-| [**raft-examples**](raft-examples) | Runnable distributed KV demo (`KvClusterDemo`) wiring the three together: a RocksDB-backed state machine replicated over gRPC. |
+| [**raft-examples**](raft-examples) | Production-quality distributed KV server (`KvServerBootstrap`) wiring the three together: a RocksDB-backed state machine replicated over gRPC, with gRPC client API and admin service. |
 | [**raft-tests**](raft-tests) | Cross-module integration suite — real gRPC sockets, real RocksDB stores, partition / chaos / linearizability / restart-from-disk / snapshot-install scenarios. |
 
 The split keeps raft-core's invariant intact: no I/O, no native libs,
@@ -46,7 +46,7 @@ The fastest way to see all five modules cooperating is the bundled
 
 ```bash
 mvn -f raft-examples/pom.xml compile exec:java \
-    -Dexec.mainClass=io.github.xinfra.lab.raft.examples.KvClusterDemo
+    -Dexec.mainClass=io.github.xinfra.lab.raft.examples.KvServerBootstrap
 ```
 
 This brings up three peers in a single JVM (each on its own gRPC port,
@@ -123,12 +123,18 @@ new Thread(() -> {
     try {
         while (running) {
             Ready rd = node.ready();
-            // Persist hardState + entries + snapshot atomically.
+            // 1. Persist hardState + entries + snapshot atomically.
             storage.writeBatched(rd.entries(), rd.hardState(), rd.snapshot());
-            // Apply committed entries to the application state machine.
-            for (Eraftpb.Entry e : rd.committedEntries()) applyToStateMachine(e);
-            // Send outbound messages (loopback elision is the transport's job).
+            // 2. Send outbound messages (before applying — raft correctness
+            //    requires persisted entries to be sent before applying).
             for (Eraftpb.Message m : rd.messages()) transport.send(m.getTo(), m);
+            // 3. Apply snapshot to the application state machine (if any).
+            if (rd.snapshot().getMetadata().getIndex() > 0) {
+                restoreStateMachineFromSnapshot(rd.snapshot());
+            }
+            // 4. Apply committed entries to the application state machine.
+            for (Eraftpb.Entry e : rd.committedEntries()) applyToStateMachine(e);
+            // 5. Signal done.
             node.advance();
         }
     } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
@@ -138,8 +144,8 @@ new Thread(() -> {
 node.propose("hello".getBytes(StandardCharsets.UTF_8));
 ```
 
-The `RaftPeer` class in
-[`raft-examples`](raft-examples/src/main/java/io/github/xinfra/lab/raft/examples/RaftPeer.java)
+The `RaftKVNode` class in
+[`raft-examples`](raft-examples/src/main/java/io/github/xinfra/lab/raft/examples/RaftKVNode.java)
 wraps this loop in a reusable host; copy and adapt rather than starting
 from scratch.
 

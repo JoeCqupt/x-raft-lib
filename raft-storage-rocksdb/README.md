@@ -50,16 +50,15 @@ safety unless the host syncs before sending outbound messages.
 
 ```java
 try (RocksDbStorage storage = new RocksDbStorage(Paths.get("/var/lib/raft/node-1"))) {
-    Config cfg = new Config();
-    cfg.id = 1;
-    cfg.storage = storage;
-    cfg.maxSizePerMsg = 1L << 20;
-    cfg.maxInflightMsgs = 256;
-    // Recover the apply-index watermark so a restart skips
-    // already-applied entries.
-    cfg.applied = storage.getApplied();
+    Config cfg = Config.builder()
+            .id(1)
+            .storage(storage)
+            .maxSizePerMsg(1L << 20)
+            .maxInflightMsgs(256)
+            .applied(storage.getApplied())   // recover apply-index on restart
+            .build();
     // ... start node, drive Ready cycle:
-    storage.writeBatched(rd.entries, rd.hardState, rd.snapshot);
+    storage.writeBatched(rd.entries(), rd.hardState(), rd.snapshot());
     // ... after applying each batch of committed entries:
     storage.setApplied(highestAppliedIndex);
     // ... after applying a ConfChange entry:

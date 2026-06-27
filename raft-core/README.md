@@ -81,7 +81,7 @@ the package boundary — depend only on `io.github.xinfra.lab.raft`.
 ## Quickstart (single-node, in-process)
 
 > The snippet below is illustrative. For a working multi-node demo see
-> [`KvClusterDemo.java`](../raft-examples/src/main/java/io/github/xinfra/lab/raft/examples/KvClusterDemo.java)
+> [`KvServerBootstrap.java`](../raft-examples/src/main/java/io/github/xinfra/lab/raft/examples/KvServerBootstrap.java)
 > in raft-examples.
 
 ### `RawNode` — single-threaded
@@ -106,12 +106,12 @@ while (running) {
     if (rn.hasReady()) {
         Ready rd = rn.ready();
         persist(rd.entries(), rd.hardState());                // 1. persist ATOMICALLY
-        if (!Util.isEmptySnap(rd.snapshot())) {
-            storage.applySnapshot(rd.snapshot());
-        }
         send(rd.messages());                                 // 2. send messages
-        apply(rd.committedEntries());                        // 3. apply to state machine
-        rn.advance(rd);                                      // 4. signal done
+        if (!Util.isEmptySnap(rd.snapshot())) {
+            restoreFromSnapshot(rd.snapshot());               // 3. apply snapshot
+        }
+        apply(rd.committedEntries());                        // 4. apply to state machine
+        rn.advance(rd);                                      // 5. signal done
     }
 }
 ```
@@ -131,10 +131,13 @@ n.transferLeadership(myId, targetId);
 // Single consumer drains Ready:
 while (running) {
     Ready rd = n.ready();
-    persist(rd.entries(), rd.hardState());
-    send(rd.messages());
-    apply(rd.committedEntries());
-    n.advance(rd);
+    persist(rd.entries(), rd.hardState());           // 1. persist
+    send(rd.messages());                             // 2. send
+    if (!Util.isEmptySnap(rd.snapshot())) {
+        restoreFromSnapshot(rd.snapshot());           // 3. apply snapshot
+    }
+    apply(rd.committedEntries());                    // 4. apply entries
+    n.advance(rd);                                   // 5. signal done
 }
 
 n.stop();   // blocks until the event loop exits and pending futures complete
@@ -212,7 +215,7 @@ dependency:
 - [**raft-storage-rocksdb**](../raft-storage-rocksdb) — RocksDB
   implementation of `Storage`. Atomic Ready-cycle persistence via
   `WriteBatch` (`writeBatched(entries, hardState, snapshot)`).
-- [**raft-examples**](../raft-examples) — `RaftPeer` scaffold wiring
+- [**raft-examples**](../raft-examples) — `RaftKVNode` scaffold wiring
   the three together (transport + storage + Ready loop + persistent
   apply / confState watermarks).
 - [**raft-tests**](../raft-tests) — cross-module integration tests

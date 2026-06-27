@@ -34,7 +34,7 @@ The fastest way to see all modules working together is the bundled 3-node KV clu
 
 ```bash
 mvn -f raft-examples/pom.xml compile exec:java \
-    -Dexec.mainClass=io.github.xinfra.lab.raft.examples.KvClusterDemo
+    -Dexec.mainClass=io.github.xinfra.lab.raft.examples.KvServerBootstrap
 ```
 
 This brings up three peers in a single JVM (each on its own gRPC port, its own RocksDB directory), elects a leader, runs a scripted workload, waits for replication, and prints each peer's final KV view.
@@ -87,9 +87,17 @@ new Thread(() -> {
     try {
         while (running) {
             Ready rd = node.ready();
+            // 1. Persist.
             storage.writeBatched(rd.entries(), rd.hardState(), rd.snapshot());
-            for (Eraftpb.Entry e : rd.committedEntries()) applyToStateMachine(e);
+            // 2. Send messages.
             for (Eraftpb.Message m : rd.messages()) transport.send(m.getTo(), m);
+            // 3. Apply snapshot (if any).
+            if (rd.snapshot().getMetadata().getIndex() > 0) {
+                restoreStateMachineFromSnapshot(rd.snapshot());
+            }
+            // 4. Apply committed entries.
+            for (Eraftpb.Entry e : rd.committedEntries()) applyToStateMachine(e);
+            // 5. Signal done.
             node.advance();
         }
     } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
@@ -99,7 +107,7 @@ new Thread(() -> {
 node.propose("hello".getBytes(StandardCharsets.UTF_8));
 ```
 
-The `RaftPeer` class in [raft-examples](../raft-examples/src/main/java/io/github/xinfra/lab/raft/examples/RaftPeer.java) wraps this loop in a reusable host — copy and adapt rather than starting from scratch.
+The `RaftKVNode` class in [raft-examples](../raft-examples/src/main/java/io/github/xinfra/lab/raft/examples/RaftKVNode.java) wraps this loop in a reusable host — copy and adapt rather than starting from scratch.
 
 ## RawNode vs DefaultNode
 
@@ -121,10 +129,13 @@ while (running) {
     for (Message msg : received) rn.step(msg);
     if (rn.hasReady()) {
         Ready rd = rn.ready();
-        persist(rd.entries, rd.hardState);
-        send(rd.messages);
-        apply(rd.committedEntries);
-        rn.advance(rd);
+        persist(rd.entries(), rd.hardState());           // 1. persist
+        send(rd.messages());                             // 2. send
+        if (!Util.isEmptySnap(rd.snapshot())) {
+            restoreFromSnapshot(rd.snapshot());           // 3. apply snapshot
+        }
+        apply(rd.committedEntries());                    // 4. apply entries
+        rn.advance(rd);                                  // 5. signal done
     }
 }
 ```
@@ -144,10 +155,13 @@ n.transferLeadership(myId, targetId);
 // Single consumer drains Ready:
 while (running) {
     Ready rd = n.ready();
-    persist(rd.entries, rd.hardState);
-    send(rd.messages);
-    apply(rd.committedEntries);
-    n.advance(rd);
+    persist(rd.entries(), rd.hardState());           // 1. persist
+    send(rd.messages());                             // 2. send
+    if (!Util.isEmptySnap(rd.snapshot())) {
+        restoreFromSnapshot(rd.snapshot());           // 3. apply snapshot
+    }
+    apply(rd.committedEntries());                    // 4. apply entries
+    n.advance(rd);                                   // 5. signal done
 }
 
 n.stop();

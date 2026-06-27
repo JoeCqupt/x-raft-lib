@@ -6,7 +6,7 @@
  */
 package io.github.xinfra.lab.raft.tests;
 
-import io.github.xinfra.lab.raft.examples.RaftKVNode;
+
 import io.github.xinfra.lab.raft.tests.chaos.ChaosController;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -25,6 +25,7 @@ import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.awaitLeader
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.awaitTrue;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.chaosPeer;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.findLeader;
+import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.forceSnapshotAndCompact;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.findLeaderOrWait;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.freePorts;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.peerMap;
@@ -59,7 +60,7 @@ class ZeroCopySnapshotStreamingTest {
         Map<Long, ConcurrentLinkedQueue<String>> applyLogs = new ConcurrentHashMap<>();
         for (long id = 1; id <= 3; id++) applyLogs.put(id, new ConcurrentLinkedQueue<>());
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
@@ -73,7 +74,7 @@ class ZeroCopySnapshotStreamingTest {
             long victim = pickFollower(nodes, leaderId);
             chaos.isolate(victim);
 
-            RaftKVNode leader = findLeader(nodes);
+            TestRaftNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
             int batch = 30;
             for (int i = 0; i < batch; i++) {
@@ -91,22 +92,22 @@ class ZeroCopySnapshotStreamingTest {
             // Snapshot + compact on the connected nodes so the victim can only
             // catch up via a snapshot install; the leader's snapshot carries the
             // large payload (out-of-band, in its side-car).
-            for (RaftKVNode p : nodes) {
+            for (TestRaftNode p : nodes) {
                 if (p.id != victim) {
-                    p.forceSnapshotAndCompact(payload);
+                    forceSnapshotAndCompact(p, payload);
                 }
             }
 
             // forceSnapshotAndCompact can briefly stall the event loop and
             // make the incumbent leader step down before re-winning, so wait
             // past the gap rather than snapshotting the cluster mid-election.
-            RaftKVNode leaderAfterCompact = findLeaderOrWait(nodes, 5_000);
+            TestRaftNode leaderAfterCompact = findLeaderOrWait(nodes, 5_000);
             assertThat(leaderAfterCompact).as("a leader must be visible after snapshot+compact").isNotNull();
             long leaderCommit = leaderAfterCompact.basicStatus().commit;
 
             chaos.heal(victim);
 
-            RaftKVNode recovered = nodes.stream().filter(p -> p.id == victim).findFirst().orElseThrow();
+            TestRaftNode recovered = nodes.stream().filter(p -> p.id == victim).findFirst().orElseThrow();
             // Raft considers the snapshot installed (commit advances) the moment
             // it processes MsgSnapshot in-memory, BUT the Storage.applySnapshot
             // write happens on the next Ready cycle when the host drains
@@ -127,7 +128,7 @@ class ZeroCopySnapshotStreamingTest {
                     .isTrue();
 
             // Inline data is empty on BOTH ends — the bytes never rode in the message.
-            RaftKVNode leaderForInspection = findLeaderOrWait(nodes, 5_000);
+            TestRaftNode leaderForInspection = findLeaderOrWait(nodes, 5_000);
             assertThat(leaderForInspection).as("a leader must be visible for snapshot inspection").isNotNull();
             assertThat(leaderForInspection.storage.snapshot().getData().isEmpty())
                     .as("leader snapshot must be metadata-only").isTrue();
@@ -141,7 +142,7 @@ class ZeroCopySnapshotStreamingTest {
             assertVerifiable(sidecar, PAYLOAD_BYTES);
 
             // Cluster still makes progress post-heal on all three nodes.
-            RaftKVNode leader2 = findLeader(nodes);
+            TestRaftNode leader2 = findLeader(nodes);
             assertThat(leader2).isNotNull();
             int post = 5;
             for (int i = 0; i < post; i++) {
@@ -198,8 +199,8 @@ class ZeroCopySnapshotStreamingTest {
         }
     }
 
-    private static long pickFollower(List<RaftKVNode> nodes, long leaderId) {
-        for (RaftKVNode p : nodes) {
+    private static long pickFollower(List<TestRaftNode> nodes, long leaderId) {
+        for (TestRaftNode p : nodes) {
             if (p.id != leaderId) return p.id;
         }
         throw new IllegalStateException("no follower found");

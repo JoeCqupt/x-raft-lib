@@ -34,7 +34,7 @@
     </properties>
 
     <dependencies>
-        <!-- All four runtime modules; this is integration territory. -->
+        <!-- All three runtime modules; this is integration territory. -->
         <dependency>
             <groupId>io.github.x-infra-lab</groupId>
             <artifactId>raft-core</artifactId>
@@ -47,11 +47,6 @@
         <dependency>
             <groupId>io.github.x-infra-lab</groupId>
             <artifactId>raft-storage-rocksdb</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>io.github.x-infra-lab</groupId>
-            <artifactId>raft-examples</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

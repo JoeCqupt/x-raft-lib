@@ -15,7 +15,7 @@ import java.util.Set;
 
 /**
  * Wing &amp; Gong-style linearizability checker for a key-value register
- * (the {@link io.github.xinfra.lab.raft.examples.RocksKvStore} spec:
+ * (KV register spec:
  * put, get, delete, where get returns the most recently put value or
  * absent if never put / deleted since).
  *

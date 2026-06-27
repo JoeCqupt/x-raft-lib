@@ -6,7 +6,7 @@
  */
 package io.github.xinfra.lab.raft.tests;
 
-import io.github.xinfra.lab.raft.examples.RaftKVNode;
+
 import io.github.xinfra.lab.raft.tests.chaos.ChaosController;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -41,7 +41,7 @@ class PartitionIntegrationTest {
         Map<Long, String> peers = peerMap(ports);
         ChaosController chaos = new ChaosController();
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 5; id++) {
                 long fid = id;
@@ -51,14 +51,14 @@ class PartitionIntegrationTest {
             assertThat(awaitLeader(nodes, 10_000)).isPositive();
 
             // Split: {1,2} (minority) | {3,4,5} (majority).
-            List<RaftKVNode> minority = List.of(nodes.get(0), nodes.get(1));
-            List<RaftKVNode> majority = List.of(nodes.get(2), nodes.get(3), nodes.get(4));
+            List<TestRaftNode> minority = List.of(nodes.get(0), nodes.get(1));
+            List<TestRaftNode> majority = List.of(nodes.get(2), nodes.get(3), nodes.get(4));
             chaos.partition(List.of(1L, 2L), List.of(3L, 4L, 5L));
 
             // The majority side elects (or retains) a leader.
             long majLeader = awaitLeader(majority, 15_000);
             assertThat(majLeader).as("majority side must have a leader").isPositive();
-            RaftKVNode leader = findLeader(majority);
+            TestRaftNode leader = findLeader(majority);
 
             long majPre = leader.basicStatus().commit;
             for (int i = 0; i < 10; i++) leader.propose(("maj-" + i).getBytes());
@@ -90,7 +90,7 @@ class PartitionIntegrationTest {
         Map<Long, String> peers = peerMap(ports);
         ChaosController chaos = new ChaosController();
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
@@ -101,14 +101,14 @@ class PartitionIntegrationTest {
 
             // Drop ~20% of all messages for the duration of the proposals.
             chaos.setDropProbability(0.2);
-            RaftKVNode leader = findLeader(nodes);
+            TestRaftNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
             long pre = leader.basicStatus().commit;
             for (int i = 0; i < 30; i++) leader.propose(("lossy-" + i).getBytes());
 
             // Even with loss, retransmission drives the cluster to commit all 30.
             assertThat(awaitTrue(() -> {
-                RaftKVNode l = findLeader(nodes);
+                TestRaftNode l = findLeader(nodes);
                 return l != null && l.basicStatus().commit >= pre + 30;
             }, 30_000)).as("leader must commit all proposals despite 20%% loss").isTrue();
 
@@ -123,7 +123,7 @@ class PartitionIntegrationTest {
         }
     }
 
-    private static void closeAll(List<RaftKVNode> nodes) {
+    private static void closeAll(List<TestRaftNode> nodes) {
         for (int i = nodes.size() - 1; i >= 0; i--) {
             try { nodes.get(i).close(); } catch (Throwable ignored) {}
         }

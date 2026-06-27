@@ -6,11 +6,16 @@
  */
 package io.github.xinfra.lab.raft.examples;
 
+import com.google.protobuf.InvalidProtocolBufferException;
 import io.github.xinfra.lab.raft.examples.proto.KvCommand;
+import io.github.xinfra.lab.raft.examples.proto.KvEntry;
+import io.github.xinfra.lab.raft.examples.proto.KvSnapshotData;
 import org.rocksdb.Options;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
+import org.rocksdb.WriteBatch;
+import org.rocksdb.WriteOptions;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -73,35 +78,38 @@ public final class KvStateMachine implements AutoCloseable {
     }
 
     public byte[] serializeState() {
-        StringBuilder sb = new StringBuilder();
+        KvSnapshotData.Builder builder = KvSnapshotData.newBuilder();
         try (RocksIterator it = db.newIterator()) {
             for (it.seekToFirst(); it.isValid(); it.next()) {
-                sb.append(new String(it.key(), StandardCharsets.UTF_8))
-                        .append('|')
-                        .append(new String(it.value(), StandardCharsets.UTF_8))
-                        .append('\n');
+                builder.addEntries(KvEntry.newBuilder()
+                        .setKey(new String(it.key(), StandardCharsets.UTF_8))
+                        .setValue(new String(it.value(), StandardCharsets.UTF_8)));
             }
         }
-        return sb.toString().getBytes(StandardCharsets.UTF_8);
+        return builder.build().toByteArray();
     }
 
     public void restoreState(byte[] data) {
-        try (RocksIterator it = db.newIterator()) {
-            for (it.seekToFirst(); it.isValid(); it.next()) {
-                db.delete(it.key());
-            }
-        } catch (RocksDBException e) {
-            throw new IllegalStateException("clear failed during restore", e);
+        KvSnapshotData snapshot;
+        try {
+            snapshot = KvSnapshotData.parseFrom(data);
+        } catch (InvalidProtocolBufferException e) {
+            throw new IllegalStateException("failed to parse snapshot data", e);
         }
-        String s = new String(data, StandardCharsets.UTF_8);
-        for (String line : s.split("\n")) {
-            if (line.isEmpty()) continue;
-            String[] parts = line.split("\\|", 2);
-            try {
-                db.put(bytes(parts[0]), bytes(parts.length > 1 ? parts[1] : ""));
-            } catch (RocksDBException e) {
-                throw new IllegalStateException("restore put failed", e);
+
+        try (WriteBatch batch = new WriteBatch();
+             WriteOptions wo = new WriteOptions()) {
+            try (RocksIterator it = db.newIterator()) {
+                for (it.seekToFirst(); it.isValid(); it.next()) {
+                    batch.delete(it.key());
+                }
             }
+            for (KvEntry entry : snapshot.getEntriesList()) {
+                batch.put(bytes(entry.getKey()), bytes(entry.getValue()));
+            }
+            db.write(wo, batch);
+        } catch (RocksDBException e) {
+            throw new IllegalStateException("restore failed", e);
         }
     }
 

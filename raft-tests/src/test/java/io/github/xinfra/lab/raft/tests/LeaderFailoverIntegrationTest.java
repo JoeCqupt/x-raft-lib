@@ -6,7 +6,7 @@
  */
 package io.github.xinfra.lab.raft.tests;
 
-import io.github.xinfra.lab.raft.examples.RaftKVNode;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -49,12 +49,12 @@ class LeaderFailoverIntegrationTest {
             applyLogs.put(id, new ConcurrentLinkedQueue<>());
         }
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
                 ConcurrentLinkedQueue<byte[]> log = applyLogs.get(fid);
-                nodes.add(new RaftKVNode(
+                nodes.add(new TestRaftNode(
                         fid,
                         ports[(int) (fid - 1)],
                         tmp.resolve("p" + fid),
@@ -66,7 +66,7 @@ class LeaderFailoverIntegrationTest {
             long firstLeaderId = awaitLeader(nodes, 10_000);
             assertThat(firstLeaderId).as("initial leader elected").isPositive();
             assertThat(awaitConvergedLeader(nodes, 10_000)).isTrue();
-            RaftKVNode firstLeader = findLeader(nodes);
+            TestRaftNode firstLeader = findLeader(nodes);
             assertThat(firstLeader).isNotNull();
 
             // Commit a couple of entries through the first leader so all
@@ -86,13 +86,13 @@ class LeaderFailoverIntegrationTest {
             // new leader within a few election timeouts.
             assertThat(awaitTrue(
                     () -> {
-                        RaftKVNode l = findLeader(nodes);
+                        TestRaftNode l = findLeader(nodes);
                         return l != null && l.id != oldLeaderId;
                     },
                     20_000))
                     .as("new leader (id != %s) must emerge", oldLeaderId).isTrue();
 
-            RaftKVNode newLeader = findLeader(nodes);
+            TestRaftNode newLeader = findLeader(nodes);
             assertThat(newLeader).isNotNull();
             assertThat(newLeader.id).isNotEqualTo(oldLeaderId);
 
@@ -106,7 +106,7 @@ class LeaderFailoverIntegrationTest {
                     20_000))
                     .as("surviving nodes must apply post-failover proposals").isTrue();
 
-            for (RaftKVNode p : nodes) {
+            for (TestRaftNode p : nodes) {
                 List<String> seen = applyLogs.get(p.id).stream().map(String::new).toList();
                 assertThat(seen.subList(0, 5))
                         .as("pre-failover prefix on peer %d", p.id)

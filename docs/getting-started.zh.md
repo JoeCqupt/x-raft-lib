@@ -34,7 +34,7 @@
 
 ```bash
 mvn -f raft-examples/pom.xml compile exec:java \
-    -Dexec.mainClass=io.github.xinfra.lab.raft.examples.KvClusterDemo
+    -Dexec.mainClass=io.github.xinfra.lab.raft.examples.KvServerBootstrap
 ```
 
 这会在单个 JVM 中启动三个节点（各自绑定独立的 gRPC 端口和 RocksDB 目录），选出 Leader，执行一组脚本化的写操作，等待复制完成，然后输出每个节点的最终 KV 视图。
@@ -87,9 +87,17 @@ new Thread(() -> {
     try {
         while (running) {
             Ready rd = node.ready();
+            // 1. 持久化。
             storage.writeBatched(rd.entries(), rd.hardState(), rd.snapshot());
-            for (Eraftpb.Entry e : rd.committedEntries()) applyToStateMachine(e);
+            // 2. 发送消息。
             for (Eraftpb.Message m : rd.messages()) transport.send(m.getTo(), m);
+            // 3. 应用快照（如有）。
+            if (rd.snapshot().getMetadata().getIndex() > 0) {
+                restoreStateMachineFromSnapshot(rd.snapshot());
+            }
+            // 4. 应用已提交条目。
+            for (Eraftpb.Entry e : rd.committedEntries()) applyToStateMachine(e);
+            // 5. 通知完成。
             node.advance();
         }
     } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
@@ -99,7 +107,7 @@ new Thread(() -> {
 node.propose("hello".getBytes(StandardCharsets.UTF_8));
 ```
 
-[raft-examples](../raft-examples/src/main/java/io/github/xinfra/lab/raft/examples/RaftPeer.java) 中的 `RaftPeer` 类将这个循环封装为可复用的宿主 —— 建议直接复制并适配，而非从零开始。
+[raft-examples](../raft-examples/src/main/java/io/github/xinfra/lab/raft/examples/RaftKVNode.java) 中的 `RaftKVNode` 类将这个循环封装为可复用的宿主 —— 建议直接复制并适配，而非从零开始。
 
 ## RawNode vs DefaultNode
 
@@ -121,10 +129,13 @@ while (running) {
     for (Message msg : received) rn.step(msg);
     if (rn.hasReady()) {
         Ready rd = rn.ready();
-        persist(rd.entries, rd.hardState);
-        send(rd.messages);
-        apply(rd.committedEntries);
-        rn.advance(rd);
+        persist(rd.entries(), rd.hardState());           // 1. 持久化
+        send(rd.messages());                             // 2. 网络发送
+        if (!Util.isEmptySnap(rd.snapshot())) {
+            restoreFromSnapshot(rd.snapshot());           // 3. 应用快照
+        }
+        apply(rd.committedEntries());                    // 4. 应用到状态机
+        rn.advance(rd);                                  // 5. 通知完成
     }
 }
 ```
@@ -144,10 +155,13 @@ n.transferLeadership(myId, targetId);
 // 单一消费者消费 Ready：
 while (running) {
     Ready rd = n.ready();
-    persist(rd.entries, rd.hardState);
-    send(rd.messages);
-    apply(rd.committedEntries);
-    n.advance(rd);
+    persist(rd.entries(), rd.hardState());           // 1. 持久化
+    send(rd.messages());                             // 2. 网络发送
+    if (!Util.isEmptySnap(rd.snapshot())) {
+        restoreFromSnapshot(rd.snapshot());           // 3. 应用快照
+    }
+    apply(rd.committedEntries());                    // 4. 应用到状态机
+    n.advance(rd);                                   // 5. 通知完成
 }
 
 n.stop();

@@ -39,6 +39,15 @@ message DeleteRequest {
 
 message DeleteResponse {}
 
+message KvSnapshotData {
+    repeated KvEntry entries = 1;
+}
+
+message KvEntry {
+    string key = 1;
+    string value = 2;
+}
+
 // Serialized into raft log entries as the state-machine command.
 message KvCommand {
     enum Op {

@@ -6,7 +6,7 @@
  */
 package io.github.xinfra.lab.raft.tests;
 
-import io.github.xinfra.lab.raft.examples.RaftKVNode;
+
 import io.github.xinfra.lab.raft.proto.Eraftpb;
 import io.github.xinfra.lab.raft.tests.chaos.ChaosController;
 import org.junit.jupiter.api.Test;
@@ -45,7 +45,7 @@ class DynamicMembershipIntegrationTest {
         Map<Long, String> peers = peerMap(ports);
         ChaosController chaos = new ChaosController();
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
@@ -55,7 +55,7 @@ class DynamicMembershipIntegrationTest {
 
             long leaderId = awaitLeader(nodes, 10_000);
             assertThat(leaderId).isPositive();
-            RaftKVNode leader = findLeader(nodes);
+            TestRaftNode leader = findLeader(nodes);
             long removed = followerOf(nodes, leaderId);
 
             Eraftpb.ConfChangeV2 cc = Eraftpb.ConfChangeV2.newBuilder()
@@ -78,7 +78,7 @@ class DynamicMembershipIntegrationTest {
                     .isTrue();
 
             // The reduced cluster still makes progress.
-            RaftKVNode leader2 = findLeader(nodes);
+            TestRaftNode leader2 = findLeader(nodes);
             assertThat(leader2).isNotNull();
             long pre = leader2.basicStatus().commit;
             for (int i = 0; i < 5; i++) leader2.propose(("after-remove-" + i).getBytes());
@@ -108,7 +108,7 @@ class DynamicMembershipIntegrationTest {
         Map<Long, ConcurrentLinkedQueue<String>> applyLogs = new ConcurrentHashMap<>();
         for (long id = 1; id <= 4; id++) applyLogs.put(id, new ConcurrentLinkedQueue<>());
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
@@ -117,7 +117,7 @@ class DynamicMembershipIntegrationTest {
             }
             long leaderId = awaitLeader(nodes, 10_000);
             assertThat(leaderId).isPositive();
-            RaftKVNode leader = findLeader(nodes);
+            TestRaftNode leader = findLeader(nodes);
 
             // Commit some entries before the join so the learner has history to
             // catch up on.
@@ -125,10 +125,10 @@ class DynamicMembershipIntegrationTest {
 
             // Start node 4 (non-bootstrap, empty storage). It knows how to reach
             // 1..3; the existing nodes learn its address now.
-            RaftKVNode joiner = chaosPeer(4L, ports, allPeers, tmp.resolve("p4"), false,
+            TestRaftNode joiner = chaosPeer(4L, ports, allPeers, tmp.resolve("p4"), false,
                     (idx, data) -> applyLogs.get(4L).add(new String(data)), chaos);
             nodes.add(joiner);
-            for (RaftKVNode p : nodes) {
+            for (TestRaftNode p : nodes) {
                 if (p.id != 4L) p.transport.addPeer(4L, allPeers.get(4L));
             }
 
@@ -173,20 +173,20 @@ class DynamicMembershipIntegrationTest {
 
     // ---- helpers ----
 
-    private static List<Long> votersOf(RaftKVNode p) {
+    private static List<Long> votersOf(TestRaftNode p) {
         return p.storage.initialState().confState().getVotersList();
     }
 
-    private static List<Long> learnersOf(RaftKVNode p) {
+    private static List<Long> learnersOf(TestRaftNode p) {
         return p.storage.initialState().confState().getLearnersList();
     }
 
-    private static long followerOf(List<RaftKVNode> nodes, long leaderId) {
-        for (RaftKVNode p : nodes) if (p.id != leaderId) return p.id;
+    private static long followerOf(List<TestRaftNode> nodes, long leaderId) {
+        for (TestRaftNode p : nodes) if (p.id != leaderId) return p.id;
         throw new IllegalStateException("no follower");
     }
 
-    private static void closeAll(List<RaftKVNode> nodes) {
+    private static void closeAll(List<TestRaftNode> nodes) {
         for (int i = nodes.size() - 1; i >= 0; i--) {
             try { nodes.get(i).close(); } catch (Throwable ignored) {}
         }

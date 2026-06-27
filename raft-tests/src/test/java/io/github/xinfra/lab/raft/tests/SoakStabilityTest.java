@@ -7,7 +7,7 @@
 package io.github.xinfra.lab.raft.tests;
 
 import io.github.xinfra.lab.raft.RaftException;
-import io.github.xinfra.lab.raft.examples.RaftKVNode;
+
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -22,6 +22,7 @@ import java.util.Map;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.awaitLeader;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.awaitTrue;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.findLeader;
+import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.forceSnapshotAndCompact;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.freePorts;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.peerMap;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -45,11 +46,11 @@ class SoakStabilityTest {
         int[] ports = freePorts(3);
         Map<Long, String> peers = peerMap(ports);
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
-                nodes.add(new RaftKVNode(fid, ports[(int) (fid - 1)],
+                nodes.add(new TestRaftNode(fid, ports[(int) (fid - 1)],
                         tmp.resolve("p" + fid), peers, true, (idx, data) -> { }));
             }
 
@@ -68,7 +69,7 @@ class SoakStabilityTest {
             int round = 0;
 
             while (System.currentTimeMillis() < deadline) {
-                RaftKVNode leader = findLeader(nodes);
+                TestRaftNode leader = findLeader(nodes);
                 if (leader == null) {
                     // Re-elect window; back off briefly.
                     Thread.sleep(50);
@@ -98,7 +99,7 @@ class SoakStabilityTest {
                 // grow without bound — exercises the snapshot path under load.
                 if (++round % 10 == 0) {
                     try {
-                        leader.forceSnapshotAndCompact(("snap@" + leader.basicStatus().applied).getBytes());
+                        forceSnapshotAndCompact(leader, ("snap@" + leader.basicStatus().applied).getBytes());
                     } catch (Exception ignored) {
                         // Leadership may have moved; ignore and continue.
                     }
@@ -158,9 +159,9 @@ class SoakStabilityTest {
         }
     }
 
-    private static long maxCommit(List<RaftKVNode> nodes) {
+    private static long maxCommit(List<TestRaftNode> nodes) {
         long max = 0;
-        for (RaftKVNode p : nodes) max = Math.max(max, p.basicStatus().commit);
+        for (TestRaftNode p : nodes) max = Math.max(max, p.basicStatus().commit);
         return max;
     }
 }

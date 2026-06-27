@@ -6,7 +6,7 @@
  */
 package io.github.xinfra.lab.raft.tests;
 
-import io.github.xinfra.lab.raft.examples.RaftKVNode;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -37,11 +37,11 @@ class ReadIndexIntegrationTest {
         int[] ports = freePorts(3);
         Map<Long, String> peers = peerMap(ports);
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
-                nodes.add(new RaftKVNode(fid, ports[(int) (fid - 1)],
+                nodes.add(new TestRaftNode(fid, ports[(int) (fid - 1)],
                         tmp.resolve("p" + fid), peers, true,
                         (idx, data) -> {}));
             }
@@ -49,7 +49,7 @@ class ReadIndexIntegrationTest {
             long leaderId = awaitLeader(nodes, 10_000);
             assertThat(leaderId).as("must elect a leader").isPositive();
 
-            RaftKVNode leader = findLeader(nodes);
+            TestRaftNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
 
             // Propose some data first so committed index is beyond bootstrap entries
@@ -79,18 +79,18 @@ class ReadIndexIntegrationTest {
         int[] ports = freePorts(3);
         Map<Long, String> peers = peerMap(ports);
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
-                nodes.add(new RaftKVNode(fid, ports[(int) (fid - 1)],
+                nodes.add(new TestRaftNode(fid, ports[(int) (fid - 1)],
                         tmp.resolve("p" + fid), peers, true,
                         (idx, data) -> {}));
             }
 
             long leaderId = awaitLeader(nodes, 10_000);
             assertThat(leaderId).isPositive();
-            RaftKVNode leader = findLeader(nodes);
+            TestRaftNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
 
             // Fire multiple readIndex requests concurrently
@@ -129,11 +129,11 @@ class ReadIndexIntegrationTest {
         int[] ports = freePorts(3);
         Map<Long, String> peers = peerMap(ports);
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
-                nodes.add(new RaftKVNode(fid, ports[(int) (fid - 1)],
+                nodes.add(new TestRaftNode(fid, ports[(int) (fid - 1)],
                         tmp.resolve("p" + fid), peers, true,
                         (idx, data) -> {}));
             }
@@ -142,8 +142,8 @@ class ReadIndexIntegrationTest {
             assertThat(leaderId).isPositive();
 
             // Find a follower
-            RaftKVNode follower = null;
-            for (RaftKVNode p : nodes) {
+            TestRaftNode follower = null;
+            for (TestRaftNode p : nodes) {
                 if (p.id != leaderId) {
                     follower = p;
                     break;

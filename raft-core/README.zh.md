@@ -67,11 +67,13 @@ while (running) {
     for (Message msg : received) rn.step(msg);
     if (rn.hasReady()) {
         Ready rd = rn.ready();
-        persist(rd.entries(), rd.hardState());     // 持久化
-        if (!Util.isEmptySnap(rd.snapshot())) storage.applySnapshot(rd.snapshot());
-        send(rd.messages());                       // 网络发送
-        apply(rd.committedEntries());              // 应用到状态机
-        rn.advance(rd);                            // 通知 raft 完成
+        persist(rd.entries(), rd.hardState());     // 1. 持久化
+        send(rd.messages());                       // 2. 网络发送
+        if (!Util.isEmptySnap(rd.snapshot())) {
+            restoreFromSnapshot(rd.snapshot());     // 3. 应用快照
+        }
+        apply(rd.committedEntries());              // 4. 应用到状态机
+        rn.advance(rd);                            // 5. 通知 raft 完成
     }
 }
 ```
@@ -97,11 +99,13 @@ Status st = n.status();
 // 消费 Ready 的循环（单一消费者）：
 while (running) {
     Ready rd = n.ready();
-    persist(rd.entries(), rd.hardState());
-    if (!Util.isEmptySnap(rd.snapshot())) storage.applySnapshot(rd.snapshot());
-    send(rd.messages());
-    apply(rd.committedEntries());
-    n.advance(rd);
+    persist(rd.entries(), rd.hardState());           // 1. 持久化
+    send(rd.messages());                             // 2. 网络发送
+    if (!Util.isEmptySnap(rd.snapshot())) {
+        restoreFromSnapshot(rd.snapshot());           // 3. 应用快照
+    }
+    apply(rd.committedEntries());                    // 4. 应用到状态机
+    n.advance(rd);                                   // 5. 通知完成
 }
 
 n.stop();   // 阻塞直到事件循环退出 + 所有 pending future 完成

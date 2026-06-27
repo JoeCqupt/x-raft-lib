@@ -6,9 +6,8 @@
  */
 package io.github.xinfra.lab.raft.examples;
 
-import com.google.protobuf.InvalidProtocolBufferException;
 import io.github.xinfra.lab.raft.Node;
-import io.github.xinfra.lab.raft.RaftException;
+import io.github.xinfra.lab.raft.RaftStateType;
 import io.github.xinfra.lab.raft.examples.proto.KvCommand;
 import io.github.xinfra.lab.raft.proto.Eraftpb;
 import io.github.xinfra.lab.raft.transport.grpc.GrpcTransport;
@@ -28,17 +27,14 @@ public final class KvServer implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(KvServer.class);
 
     private final RaftKVNode raftKvNode;
-    private final KvStateMachine stateMachine;
     private final Server grpcServer;
 
     public KvServer(long nodeId, int raftPort, int kvPort, Path dataDir,
                     Map<Long, String> peerAddresses, boolean bootstrap) throws Exception {
-        this.stateMachine = new KvStateMachine(dataDir.resolve("kv"));
-
         GrpcTransport transport = new GrpcTransport(nodeId, raftPort);
         this.raftKvNode = new RaftKVNode(
-                nodeId, dataDir.resolve("raft"), peerAddresses, bootstrap,
-                this::onApply, this::onSnapshotRestore, transport);
+                nodeId, dataDir.resolve("raft"), dataDir.resolve("kv"),
+                peerAddresses, bootstrap, transport);
 
         this.grpcServer = ServerBuilder.forPort(kvPort)
                 .addService(new KvServiceImpl(this))
@@ -49,17 +45,12 @@ public final class KvServer implements AutoCloseable {
         LOG.info("KvServer node {} started: raft={}, kv={}", nodeId, raftPort, kvPort);
     }
 
-    private void onApply(long index, byte[] cmdBytes) {
-        try {
-            KvCommand cmd = KvCommand.parseFrom(cmdBytes);
-            stateMachine.apply(index, cmd);
-        } catch (InvalidProtocolBufferException e) {
-            LOG.error("failed to parse KvCommand at index {}", index, e);
+    public void checkLeader() {
+        Node.BasicStatus bs = raftKvNode.basicStatus();
+        if (bs.state != RaftStateType.StateLeader) {
+            String leaderAddr = raftKvNode.getPeerAddress(bs.lead);
+            throw new NotLeaderException(bs.lead, leaderAddr);
         }
-    }
-
-    private void onSnapshotRestore(byte[] data) {
-        stateMachine.restoreState(data);
     }
 
     public CompletableFuture<Void> proposeCommand(KvCommand cmd) {
@@ -68,7 +59,7 @@ public final class KvServer implements AutoCloseable {
 
     public CompletableFuture<Optional<String>> linearizableGet(String key) {
         return raftKvNode.readIndexWithFuture()
-                .thenApply(v -> stateMachine.get(key));
+                .thenApply(v -> raftKvNode.stateMachine().get(key));
     }
 
     public CompletableFuture<Void> addNode(long addNodeId, String address, boolean isLearner) {
@@ -82,9 +73,10 @@ public final class KvServer implements AutoCloseable {
                         .setNodeId(addNodeId))
                 .build();
 
-        raftKvNode.transport.addPeer(addNodeId, address);
+        raftKvNode.registerPeerAddress(addNodeId, address);
 
-        return raftKvNode.proposeConfChangeWithFuture(cc).thenApply(cs -> null);
+        return raftKvNode.proposeConfChangeWithFuture(cc, address)
+                .<Void>thenApply(cs -> null);
     }
 
     public CompletableFuture<Void> removeNode(long removeNodeId) {
@@ -94,17 +86,12 @@ public final class KvServer implements AutoCloseable {
                         .setNodeId(removeNodeId))
                 .build();
 
-        return raftKvNode.proposeConfChangeWithFuture(cc).thenApply(cs -> null);
+        return raftKvNode.proposeConfChangeWithFuture(cc, null)
+                .<Void>thenApply(cs -> null);
     }
 
     public void transferLeader(long transferee) throws InterruptedException {
         raftKvNode.transferLeader(raftKvNode.basicStatus().lead, transferee);
-    }
-
-    public long forceSnapshot() throws RaftException {
-        byte[] snapshotData = stateMachine.serializeState();
-        Eraftpb.Snapshot snap = raftKvNode.forceSnapshotAndCompact(snapshotData);
-        return snap != null ? snap.getMetadata().getIndex() : 0;
     }
 
     public Node.BasicStatus status() {
@@ -116,7 +103,7 @@ public final class KvServer implements AutoCloseable {
     }
 
     public KvStateMachine stateMachine() {
-        return stateMachine;
+        return raftKvNode.stateMachine();
     }
 
     @Override
@@ -124,6 +111,17 @@ public final class KvServer implements AutoCloseable {
         grpcServer.shutdown();
         try { grpcServer.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         raftKvNode.close();
-        stateMachine.close();
+    }
+
+    static final class NotLeaderException extends RuntimeException {
+        final long leaderId;
+        final String leaderAddress;
+        NotLeaderException(long leaderId, String leaderAddress) {
+            super(leaderAddress != null
+                    ? "not leader, current leader: " + leaderId + " at " + leaderAddress
+                    : "not leader, current leader: " + leaderId);
+            this.leaderId = leaderId;
+            this.leaderAddress = leaderAddress;
+        }
     }
 }

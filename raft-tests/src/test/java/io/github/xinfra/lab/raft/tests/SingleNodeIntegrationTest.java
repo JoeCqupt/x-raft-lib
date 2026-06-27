@@ -7,7 +7,7 @@
 package io.github.xinfra.lab.raft.tests;
 
 import io.github.xinfra.lab.raft.RaftStateType;
-import io.github.xinfra.lab.raft.examples.RaftKVNode;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -33,7 +33,7 @@ class SingleNodeIntegrationTest {
         int[] ports = freePorts(1);
         ConcurrentHashMap<Long, byte[]> applied = new ConcurrentHashMap<>();
 
-        try (RaftKVNode p = new RaftKVNode(
+        try (TestRaftNode p = new TestRaftNode(
                 1L,
                 ports[0],
                 tmp.resolve("p1"),
@@ -56,7 +56,7 @@ class SingleNodeIntegrationTest {
         int[] ports = freePorts(1);
         java.util.List<byte[]> appliedInOrder = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
 
-        try (RaftKVNode p = new RaftKVNode(
+        try (TestRaftNode p = new TestRaftNode(
                 1L,
                 ports[0],
                 tmp.resolve("p1"),

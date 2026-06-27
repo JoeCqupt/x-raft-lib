@@ -16,6 +16,7 @@ import io.github.xinfra.lab.raft.ReadState;
 import io.github.xinfra.lab.raft.Ready;
 import io.github.xinfra.lab.raft.SnapshotStatus;
 import io.github.xinfra.lab.raft.Transport;
+import io.github.xinfra.lab.raft.examples.proto.KvCommand;
 import io.github.xinfra.lab.raft.proto.Eraftpb;
 import io.github.xinfra.lab.raft.storage.rocksdb.RocksDbStorage;
 import io.github.xinfra.lab.raft.transport.grpc.GrpcTransport;
@@ -31,33 +32,33 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 
-/**
- * End-to-end glue: {@link Node} (raft-core) + {@link RocksDbStorage}
- * (raft-storage-rocksdb) + {@link GrpcTransport} (raft-transport-grpc).
- *
- * <p>Manages the Ready→persist→send→apply→advance loop with callback-driven
- * pending proposal/read/conf-change tracking. Upper layers pass pure data;
- * proposalId and confChangeId are managed internally.
- */
 public class RaftKVNode implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(RaftKVNode.class);
+
+    private static final long SNAPSHOT_ENTRIES_THRESHOLD = 10_000;
+    private static final int MAX_CONSECUTIVE_ERRORS = 5;
 
     public final long id;
     public final RocksDbStorage storage;
     public final Transport transport;
     public final Node node;
+    private final KvStateMachine stateMachine;
     private final Thread applier;
+    private final ScheduledExecutorService ticker;
     private final boolean snapshotStreaming;
     private volatile boolean running = true;
 
-    private final BiConsumer<Long, byte[]> applier_cb;
-    private final Consumer<byte[]> snapshotRestore_cb;
+    private long lastSnapshotIndex;
+
+    private final ConcurrentHashMap<Long, String> peerAddresses = new ConcurrentHashMap<>();
+
+    private static final int CONF_CHANGE_CTX_HEADER_LEN = 8;
 
     private final ConcurrentHashMap<Long, CompletableFuture<Void>> pendingProposals = new ConcurrentHashMap<>();
     private final AtomicLong proposalIdGen = new AtomicLong(0);
@@ -67,41 +68,20 @@ public class RaftKVNode implements AutoCloseable {
 
     private record PendingRead(long safeIndex, CompletableFuture<Void> future) {}
 
-
     private final ConcurrentHashMap<Long, CompletableFuture<Eraftpb.ConfState>> pendingConfChanges = new ConcurrentHashMap<>();
     private final AtomicLong confChangeIdGen = new AtomicLong(0);
 
     public RaftKVNode(long id,
-                      int grpcPort,
                       Path storageDir,
+                      Path kvDataDir,
                       Map<Long, String> peerAddresses,
                       boolean bootstrap,
-                      BiConsumer<Long, byte[]> applyCallback) throws Exception {
-        this(id, storageDir, peerAddresses, bootstrap, applyCallback, data -> {},
-                new GrpcTransport(id, grpcPort));
-    }
-
-    public RaftKVNode(long id,
-                      Path storageDir,
-                      Map<Long, String> peerAddresses,
-                      boolean bootstrap,
-                      BiConsumer<Long, byte[]> applyCallback,
-                      Transport transport) throws Exception {
-        this(id, storageDir, peerAddresses, bootstrap, applyCallback, data -> {}, transport);
-    }
-
-    public RaftKVNode(long id,
-                      Path storageDir,
-                      Map<Long, String> peerAddresses,
-                      boolean bootstrap,
-                      BiConsumer<Long, byte[]> applyCallback,
-                      Consumer<byte[]> snapshotRestoreCallback,
                       Transport transport) throws Exception {
         this.id = id;
-        this.applier_cb = applyCallback;
-        this.snapshotRestore_cb = snapshotRestoreCallback;
+        this.stateMachine = new KvStateMachine(kvDataDir);
         this.storage = new RocksDbStorage(storageDir);
         this.transport = transport;
+        this.lastSnapshotIndex = storage.getApplied();
 
         Config cfg = Config.builder()
                 .id(id)
@@ -141,7 +121,8 @@ public class RaftKVNode implements AutoCloseable {
                 catch (InterruptedException e) { Thread.currentThread().interrupt(); }
             });
         }
-        peerAddresses.forEach((peerId, addr) -> {
+        this.peerAddresses.putAll(peerAddresses);
+        this.peerAddresses.forEach((peerId, addr) -> {
             if (peerId != id) transport.addPeer(peerId, addr);
         });
         transport.start();
@@ -150,16 +131,19 @@ public class RaftKVNode implements AutoCloseable {
         this.applier.setDaemon(false);
         this.applier.start();
 
-        java.util.concurrent.ScheduledExecutorService ticker =
-                java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-                    Thread t = new Thread(r, "raft-kv-node-" + id + "-tick");
-                    t.setDaemon(true);
-                    return t;
-                });
+        this.ticker = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "raft-kv-node-" + id + "-tick");
+            t.setDaemon(true);
+            return t;
+        });
         ticker.scheduleAtFixedRate(node::tick, 100, 100, TimeUnit.MILLISECONDS);
     }
 
     // ==================== Public API ====================
+
+    public KvStateMachine stateMachine() {
+        return stateMachine;
+    }
 
     private static final byte TRACKED_PROPOSAL_TAG = (byte) 0xFF;
     private static final int TRACKED_HEADER_LEN = 1 + 8; // tag + proposalId
@@ -209,13 +193,30 @@ public class RaftKVNode implements AutoCloseable {
         return future;
     }
 
-    public CompletableFuture<Eraftpb.ConfState> proposeConfChangeWithFuture(Eraftpb.ConfChangeV2 cc) {
+    public void registerPeerAddress(long nodeId, String address) {
+        peerAddresses.put(nodeId, address);
+        if (nodeId != id) {
+            transport.addPeer(nodeId, address);
+        }
+    }
+
+    public String getPeerAddress(long nodeId) {
+        return peerAddresses.get(nodeId);
+    }
+
+    public CompletableFuture<Eraftpb.ConfState> proposeConfChangeWithFuture(
+            Eraftpb.ConfChangeV2 cc, String peerAddress) {
         long confChangeId = confChangeIdGen.incrementAndGet();
         CompletableFuture<Eraftpb.ConfState> future = new CompletableFuture<>();
         pendingConfChanges.put(confChangeId, future);
 
-        byte[] ctx = new byte[8];
-        ByteBuffer.wrap(ctx).putLong(confChangeId);
+        byte[] addrBytes = (peerAddress != null)
+                ? peerAddress.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+                : new byte[0];
+        byte[] ctx = new byte[CONF_CHANGE_CTX_HEADER_LEN + addrBytes.length];
+        ByteBuffer.wrap(ctx, 0, 8).putLong(confChangeId);
+        System.arraycopy(addrBytes, 0, ctx, CONF_CHANGE_CTX_HEADER_LEN, addrBytes.length);
+
         Eraftpb.ConfChangeV2 ccWithCtx = cc.toBuilder()
                 .setContext(ByteString.copyFrom(ctx))
                 .build();
@@ -230,6 +231,7 @@ public class RaftKVNode implements AutoCloseable {
             pendingConfChanges.remove(confChangeId);
             future.completeExceptionally(e);
         }
+
         return future;
     }
 
@@ -245,33 +247,6 @@ public class RaftKVNode implements AutoCloseable {
         node.transferLeadership(lead, transferee);
     }
 
-    public Eraftpb.Snapshot forceSnapshotAndCompact(byte[] snapshotData) throws RaftException {
-        long applied = node.basicStatus().applied;
-        if (applied == 0) {
-            return null;
-        }
-        Eraftpb.ConfState cs = storage.initialState().confState();
-        final byte[] data = snapshotData == null ? new byte[0] : snapshotData;
-        Eraftpb.Snapshot snap;
-        if (snapshotStreaming) {
-            try {
-                snap = storage.createSnapshotStreaming(applied, cs, out -> out.write(data));
-            } catch (IOException e) {
-                throw new RaftException(RaftException.Code.UNAVAILABLE, "streaming snapshot create failed", e);
-            }
-        } else {
-            snap = storage.createSnapshot(applied, cs, data);
-        }
-        try {
-            storage.compact(applied);
-        } catch (RaftException e) {
-            if (e.code() != RaftException.Code.COMPACTED) {
-                throw e;
-            }
-        }
-        return snap;
-    }
-
     public Node.BasicStatus basicStatus() {
         return node.basicStatus();
     }
@@ -279,91 +254,116 @@ public class RaftKVNode implements AutoCloseable {
     // ==================== Ready Loop ====================
 
     private void readyLoop() {
+        int consecutiveErrors = 0;
         try {
             while (running) {
-                Ready rd = node.ready();
-                // 1. Persist.
-                storage.writeBatched(rd.entries(), rd.hardState(), rd.snapshot());
-
-                // 2. Send messages.
-                if (rd.messages() != null) {
-                    for (Eraftpb.Message m : rd.messages()) {
-                        if (m.getTo() == id) continue;
-                        if (snapshotStreaming && m.getMsgType() == Eraftpb.MessageType.MsgSnapshot) {
-                            sendSnapshotOutOfBand(m);
-                        } else {
-                            transport.send(m.getTo(), m);
-                        }
+                try {
+                    processReady();
+                    consecutiveErrors = 0;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception e) {
+                    consecutiveErrors++;
+                    LOG.error("readyLoop error ({}/{})", consecutiveErrors, MAX_CONSECUTIVE_ERRORS, e);
+                    if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                        LOG.error("readyLoop exceeded max consecutive errors, shutting down");
+                        break;
+                    }
+                    try { Thread.sleep(100); } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
                     }
                 }
-
-                // 3. Apply snapshot to state machine.
-                if (rd.snapshot().getMetadata().getIndex() > 0) {
-                    byte[] appData;
-                    if (snapshotStreaming) {
-                        try (InputStream sin = storage.openSnapshotData(rd.snapshot())) {
-                            appData = sin.readAllBytes();
-                        } catch (IOException | RaftException e) {
-                            LOG.error("failed to read snapshot side-car data", e);
-                            appData = ByteString.EMPTY.toByteArray();
-                        }
-                    } else {
-                        appData = rd.snapshot().getData().toByteArray();
-                    }
-                    if (appData.length > 0) {
-                        snapshotRestore_cb.accept(appData);
-                    }
-                }
-
-                // 4. Apply committed entries.
-                long highestApplied = 0;
-                if (rd.committedEntries() != null) {
-                    for (Eraftpb.Entry e : rd.committedEntries()) {
-                        if (e.getEntryType() == Eraftpb.EntryType.EntryNormal && e.getData().size() > 0) {
-                            applyNormalEntry(e);
-                        } else if (e.getEntryType() == Eraftpb.EntryType.EntryConfChange) {
-                            applyConfChangeV1(e);
-                        } else if (e.getEntryType() == Eraftpb.EntryType.EntryConfChangeV2) {
-                            applyConfChangeV2(e);
-                        }
-                        highestApplied = e.getIndex();
-                    }
-                    if (highestApplied > 0) {
-                        storage.setApplied(highestApplied);
-                    }
-                }
-
-                // 5. Process ReadStates: if applied already >= safeIndex,
-                //    complete immediately; otherwise enqueue for later.
-                if (rd.readStates() != null) {
-                    long currentApplied = highestApplied > 0
-                            ? highestApplied : node.basicStatus().applied;
-                    for (ReadState rs : rd.readStates()) {
-                        ByteBuffer ctxKey = ByteBuffer.wrap(rs.requestCtx());
-                        CompletableFuture<Void> future = pendingReads.remove(ctxKey);
-                        if (future != null) {
-                            if (currentApplied >= rs.index()) {
-                                future.complete(null);
-                            } else {
-                                waitingForApply.add(new PendingRead(rs.index(), future));
-                            }
-                        }
-                    }
-                }
-
-                // 5b. Drain reads waiting for apply to catch up.
-                if (highestApplied > 0 && !waitingForApply.isEmpty()) {
-                    drainWaitingReads(highestApplied);
-                }
-
-                // 6. Advance.
-                node.advance();
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        } catch (InvalidProtocolBufferException e) {
-            LOG.error("malformed conf-change entry", e);
+        } finally {
+            drainPendingFutures();
         }
+    }
+
+    private void processReady() throws InterruptedException, InvalidProtocolBufferException {
+        Ready rd = node.ready();
+        // 1. Persist.
+        storage.writeBatched(rd.entries(), rd.hardState(), rd.snapshot());
+
+        // 2. Send messages.
+        if (rd.messages() != null) {
+            for (Eraftpb.Message m : rd.messages()) {
+                if (m.getTo() == id) continue;
+                if (snapshotStreaming && m.getMsgType() == Eraftpb.MessageType.MsgSnapshot) {
+                    sendSnapshotOutOfBand(m);
+                } else {
+                    transport.send(m.getTo(), m);
+                }
+            }
+        }
+
+        // 3. Apply snapshot to state machine.
+        if (rd.snapshot().getMetadata().getIndex() > 0) {
+            byte[] appData;
+            if (snapshotStreaming) {
+                try (InputStream sin = storage.openSnapshotData(rd.snapshot())) {
+                    appData = sin.readAllBytes();
+                } catch (IOException | RaftException e) {
+                    LOG.error("failed to read snapshot side-car data", e);
+                    appData = ByteString.EMPTY.toByteArray();
+                }
+            } else {
+                appData = rd.snapshot().getData().toByteArray();
+            }
+            if (appData.length > 0) {
+                stateMachine.restoreState(appData);
+            }
+        }
+
+        // 4. Apply committed entries.
+        long highestApplied = 0;
+        if (rd.committedEntries() != null) {
+            for (Eraftpb.Entry e : rd.committedEntries()) {
+                if (e.getEntryType() == Eraftpb.EntryType.EntryNormal && e.getData().size() > 0) {
+                    applyNormalEntry(e);
+                } else if (e.getEntryType() == Eraftpb.EntryType.EntryConfChange) {
+                    applyConfChangeV1(e);
+                } else if (e.getEntryType() == Eraftpb.EntryType.EntryConfChangeV2) {
+                    applyConfChangeV2(e);
+                }
+                highestApplied = e.getIndex();
+            }
+            if (highestApplied > 0) {
+                storage.setApplied(highestApplied);
+            }
+        }
+
+        // 5. Process ReadStates: if applied already >= safeIndex,
+        //    complete immediately; otherwise enqueue for later.
+        if (rd.readStates() != null) {
+            long currentApplied = highestApplied > 0
+                    ? highestApplied : node.basicStatus().applied;
+            for (ReadState rs : rd.readStates()) {
+                ByteBuffer ctxKey = ByteBuffer.wrap(rs.requestCtx());
+                CompletableFuture<Void> future = pendingReads.remove(ctxKey);
+                if (future != null) {
+                    if (currentApplied >= rs.index()) {
+                        future.complete(null);
+                    } else {
+                        waitingForApply.add(new PendingRead(rs.index(), future));
+                    }
+                }
+            }
+        }
+
+        // 5b. Drain reads waiting for apply to catch up.
+        if (highestApplied > 0 && !waitingForApply.isEmpty()) {
+            drainWaitingReads(highestApplied);
+        }
+
+        // 6. Maybe snapshot + compact.
+        if (highestApplied > 0) {
+            maybeSnapshot(highestApplied);
+        }
+
+        // 7. Advance.
+        node.advance();
     }
 
     private void applyNormalEntry(Eraftpb.Entry e) {
@@ -372,14 +372,25 @@ public class RaftKVNode implements AutoCloseable {
             long proposalId = ByteBuffer.wrap(raw, 1, 8).getLong();
             byte[] cmdBytes = new byte[raw.length - TRACKED_HEADER_LEN];
             System.arraycopy(raw, TRACKED_HEADER_LEN, cmdBytes, 0, cmdBytes.length);
-            applier_cb.accept(e.getIndex(), cmdBytes);
             CompletableFuture<Void> future = pendingProposals.remove(proposalId);
-            if (future != null) {
-                future.complete(null);
+            try {
+                applyKvCommand(e.getIndex(), cmdBytes);
+                if (future != null) future.complete(null);
+            } catch (Exception ex) {
+                if (future != null) future.completeExceptionally(ex);
             }
             return;
         }
-        applier_cb.accept(e.getIndex(), raw);
+        applyKvCommand(e.getIndex(), raw);
+    }
+
+    private void applyKvCommand(long index, byte[] cmdBytes) {
+        try {
+            KvCommand cmd = KvCommand.parseFrom(cmdBytes);
+            stateMachine.apply(index, cmd);
+        } catch (InvalidProtocolBufferException e) {
+            throw new IllegalStateException("failed to parse KvCommand at index " + index, e);
+        }
     }
 
     private void applyConfChangeV1(Eraftpb.Entry e) throws InvalidProtocolBufferException, InterruptedException {
@@ -392,6 +403,7 @@ public class RaftKVNode implements AutoCloseable {
                 .build();
         Eraftpb.ConfState cs = node.applyConfChange(v2);
         storage.setConfState(cs);
+        updateTransportPeers(v2);
         completeConfChangeFuture(cc.getContext(), cs);
     }
 
@@ -399,7 +411,36 @@ public class RaftKVNode implements AutoCloseable {
         Eraftpb.ConfChangeV2 cc = Eraftpb.ConfChangeV2.parseFrom(e.getData());
         Eraftpb.ConfState cs = node.applyConfChange(cc);
         storage.setConfState(cs);
+        updateTransportPeers(cc);
         completeConfChangeFuture(cc.getContext(), cs);
+    }
+
+    private void updateTransportPeers(Eraftpb.ConfChangeV2 cc) {
+        String address = extractAddressFromContext(cc.getContext());
+        for (Eraftpb.ConfChangeSingle change : cc.getChangesList()) {
+            long nodeId = change.getNodeId();
+            if (nodeId == id) continue;
+            switch (change.getType()) {
+                case ConfChangeAddNode, ConfChangeAddLearnerNode -> {
+                    if (address != null && !address.isEmpty()) {
+                        peerAddresses.put(nodeId, address);
+                        transport.addPeer(nodeId, address);
+                    }
+                }
+                case ConfChangeRemoveNode -> {
+                    peerAddresses.remove(nodeId);
+                    transport.removePeer(nodeId);
+                }
+                default -> { }
+            }
+        }
+    }
+
+    private static String extractAddressFromContext(ByteString context) {
+        if (context == null || context.size() <= CONF_CHANGE_CTX_HEADER_LEN) return null;
+        byte[] raw = context.toByteArray();
+        return new String(raw, CONF_CHANGE_CTX_HEADER_LEN, raw.length - CONF_CHANGE_CTX_HEADER_LEN,
+                java.nio.charset.StandardCharsets.UTF_8);
     }
 
     private void drainWaitingReads(long applied) {
@@ -419,6 +460,30 @@ public class RaftKVNode implements AutoCloseable {
         CompletableFuture<Eraftpb.ConfState> future = pendingConfChanges.remove(confChangeId);
         if (future != null) {
             future.complete(cs);
+        }
+    }
+
+    private void maybeSnapshot(long applied) {
+        if (applied - lastSnapshotIndex < SNAPSHOT_ENTRIES_THRESHOLD) return;
+        try {
+            byte[] data = stateMachine.serializeState();
+            Eraftpb.ConfState cs = storage.initialState().confState();
+            storage.createSnapshot(applied, cs, data);
+            lastSnapshotIndex = applied;
+            LOG.info("node {} created snapshot at index {}", id, applied);
+        } catch (RaftException e) {
+            if (e.code() != RaftException.Code.SNAP_OUT_OF_DATE) {
+                LOG.warn("node {} snapshot creation failed at index {}", id, applied, e);
+            }
+            return;
+        }
+        try {
+            storage.compact(applied);
+            LOG.info("node {} compacted log up to index {}", id, applied);
+        } catch (RaftException e) {
+            if (e.code() != RaftException.Code.COMPACTED) {
+                LOG.warn("node {} log compaction failed at index {}", id, applied, e);
+            }
         }
     }
 
@@ -442,19 +507,7 @@ public class RaftKVNode implements AutoCloseable {
         });
     }
 
-    @Override
-    public void close() {
-        running = false;
-        try {
-            applier.interrupt();
-            applier.join(2000);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-        try { node.stop(5, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-        transport.close();
-        storage.close();
-
+    private void drainPendingFutures() {
         RaftException shutdownEx = new RaftException(RaftException.Code.UNAVAILABLE, "node shutting down");
         pendingProposals.forEach((id, f) -> f.completeExceptionally(shutdownEx));
         pendingProposals.clear();
@@ -466,5 +519,22 @@ public class RaftKVNode implements AutoCloseable {
         }
         pendingConfChanges.forEach((id, f) -> f.completeExceptionally(shutdownEx));
         pendingConfChanges.clear();
+    }
+
+    @Override
+    public void close() {
+        running = false;
+        ticker.shutdownNow();
+        try {
+            applier.interrupt();
+            applier.join(2000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        try { node.stop(5, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        transport.close();
+        drainPendingFutures();
+        stateMachine.close();
+        storage.close();
     }
 }

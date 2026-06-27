@@ -6,7 +6,7 @@
  */
 package io.github.xinfra.lab.raft.tests;
 
-import io.github.xinfra.lab.raft.examples.RaftKVNode;
+
 import io.github.xinfra.lab.raft.tests.chaos.ChaosController;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -22,6 +22,7 @@ import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.awaitLeader
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.awaitTrue;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.chaosPeer;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.findLeader;
+import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.forceSnapshotAndCompact;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.freePorts;
 import static io.github.xinfra.lab.raft.tests.IntegrationTestSupport.peerMap;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -52,7 +53,7 @@ class SnapshotInstallIntegrationTest {
         Map<Long, ConcurrentLinkedQueue<String>> applyLogs = new ConcurrentHashMap<>();
         for (long id = 1; id <= 3; id++) applyLogs.put(id, new ConcurrentLinkedQueue<>());
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
@@ -70,7 +71,7 @@ class SnapshotInstallIntegrationTest {
             chaos.isolate(victim);
 
             // The remaining majority keeps committing a sizable batch.
-            RaftKVNode leader = findLeader(nodes);
+            TestRaftNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
             int batch = 60;
             for (int i = 0; i < batch; i++) {
@@ -86,9 +87,9 @@ class SnapshotInstallIntegrationTest {
 
             // Snapshot + compact on every connected node so the log entries the
             // victim is missing are gone — forcing a snapshot install on heal.
-            for (RaftKVNode p : nodes) {
+            for (TestRaftNode p : nodes) {
                 if (p.id != victim) {
-                    p.forceSnapshotAndCompact(("state@" + p.basicStatus().applied).getBytes());
+                    forceSnapshotAndCompact(p, ("state@" + p.basicStatus().applied).getBytes());
                 }
             }
 
@@ -97,7 +98,7 @@ class SnapshotInstallIntegrationTest {
             // Heal the partition; the victim must now catch up via snapshot.
             chaos.heal(victim);
 
-            RaftKVNode recovered = nodes.stream().filter(p -> p.id == victim).findFirst().orElseThrow();
+            TestRaftNode recovered = nodes.stream().filter(p -> p.id == victim).findFirst().orElseThrow();
             assertThat(awaitTrue(() -> recovered.basicStatus().commit >= leaderCommit, 25_000))
                     .as("partitioned follower must catch up to commit %d via snapshot", leaderCommit)
                     .isTrue();
@@ -125,7 +126,7 @@ class SnapshotInstallIntegrationTest {
                     .as("leader snapshot must be metadata-only (created via streaming)").isTrue();
 
             // Post-heal proposals apply on all three, recovered node included.
-            RaftKVNode leader2 = findLeader(nodes);
+            TestRaftNode leader2 = findLeader(nodes);
             assertThat(leader2).isNotNull();
             int post = 10;
             for (int i = 0; i < post; i++) {
@@ -147,8 +148,8 @@ class SnapshotInstallIntegrationTest {
         }
     }
 
-    private static long pickFollower(List<RaftKVNode> nodes, long leaderId) {
-        for (RaftKVNode p : nodes) {
+    private static long pickFollower(List<TestRaftNode> nodes, long leaderId) {
+        for (TestRaftNode p : nodes) {
             if (p.id != leaderId) return p.id;
         }
         throw new IllegalStateException("no follower found");

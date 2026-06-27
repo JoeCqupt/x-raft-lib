@@ -50,7 +50,7 @@ API 包标注了 `@NullMarked`（JSpecify）：每个公开引用默认非空，
 | **raft-core** | 纯 Raft 状态机：选举、复制、配置变更、ReadIndex、快照、Ready 循环 | raft-proto |
 | **raft-transport-grpc** | gRPC Transport：消息投递、快照流式传输、TLS/mTLS | raft-core, grpc-netty-shaded |
 | **raft-storage-rocksdb** | RocksDB Storage：原子日志持久化、快照管理 | raft-core, rocksdbjni |
-| **raft-examples** | 端到端 KV 示例：`RaftPeer` 胶水层 + `RocksKvStore` 状态机 | 以上全部 |
+| **raft-examples** | 生产级 KV 服务器：`RaftKVNode` 胶水层 + `KvStateMachine` 状态机 | 以上全部 |
 | **raft-tests** | 跨模块集成与混沌测试套件 | 以上全部 |
 
 ## 核心内部实现

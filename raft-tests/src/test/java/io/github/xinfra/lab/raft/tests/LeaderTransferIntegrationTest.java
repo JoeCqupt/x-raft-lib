@@ -8,7 +8,7 @@ package io.github.xinfra.lab.raft.tests;
 
 import io.github.xinfra.lab.raft.RaftException;
 import io.github.xinfra.lab.raft.RaftStateType;
-import io.github.xinfra.lab.raft.examples.RaftKVNode;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -43,11 +43,11 @@ class LeaderTransferIntegrationTest {
         Map<Long, ConcurrentLinkedQueue<String>> applyLogs = new ConcurrentHashMap<>();
         for (long id = 1; id <= 3; id++) applyLogs.put(id, new ConcurrentLinkedQueue<>());
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
-                nodes.add(new RaftKVNode(fid, ports[(int) (fid - 1)],
+                nodes.add(new TestRaftNode(fid, ports[(int) (fid - 1)],
                         tmp.resolve("p" + fid), peers, true,
                         (idx, data) -> applyLogs.get(fid).add(new String(data))));
             }
@@ -55,7 +55,7 @@ class LeaderTransferIntegrationTest {
             long leaderId = awaitLeader(nodes, 10_000);
             assertThat(leaderId).isPositive();
             assertThat(awaitConvergedLeader(nodes, 10_000)).isTrue();
-            RaftKVNode leader = findLeader(nodes);
+            TestRaftNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
 
             // Commit some entries so the transferee has state to catch up on.
@@ -74,7 +74,7 @@ class LeaderTransferIntegrationTest {
             // The transferee becomes the new leader.
             assertThat(awaitTrue(
                     () -> {
-                        for (RaftKVNode p : nodes) {
+                        for (TestRaftNode p : nodes) {
                             if (p.id == transferee
                                     && p.basicStatus().state == RaftStateType.StateLeader) {
                                 return true;
@@ -85,7 +85,7 @@ class LeaderTransferIntegrationTest {
                     .as("node %d must become leader after transfer", transferee).isTrue();
 
             // The new leader can accept proposals.
-            RaftKVNode newLeader = findLeader(nodes);
+            TestRaftNode newLeader = findLeader(nodes);
             assertThat(newLeader).isNotNull();
             assertThat(newLeader.id).isEqualTo(transferee);
 
@@ -105,11 +105,11 @@ class LeaderTransferIntegrationTest {
         Map<Long, ConcurrentLinkedQueue<String>> applyLogs = new ConcurrentHashMap<>();
         for (long id = 1; id <= 3; id++) applyLogs.put(id, new ConcurrentLinkedQueue<>());
 
-        List<RaftKVNode> nodes = new ArrayList<>();
+        List<TestRaftNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
-                nodes.add(new RaftKVNode(fid, ports[(int) (fid - 1)],
+                nodes.add(new TestRaftNode(fid, ports[(int) (fid - 1)],
                         tmp.resolve("p" + fid), peers, true,
                         (idx, data) -> applyLogs.get(fid).add(new String(data))));
             }
@@ -117,7 +117,7 @@ class LeaderTransferIntegrationTest {
             long leaderId = awaitLeader(nodes, 10_000);
             assertThat(leaderId).isPositive();
             assertThat(awaitConvergedLeader(nodes, 10_000)).isTrue();
-            RaftKVNode leader = findLeader(nodes);
+            TestRaftNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
 
             // Start proposing — some will land before transfer, some after.
@@ -134,7 +134,7 @@ class LeaderTransferIntegrationTest {
                 try {
                     // During transfer, proposals on the old leader will be
                     // dropped — that's expected. We catch and continue.
-                    RaftKVNode currentLeader = findLeader(nodes);
+                    TestRaftNode currentLeader = findLeader(nodes);
                     if (currentLeader != null) {
                         currentLeader.propose(("msg-" + i).getBytes());
                     }
@@ -149,7 +149,7 @@ class LeaderTransferIntegrationTest {
             assertThat(awaitLeader(nodes, 15_000)).isPositive();
 
             // Continue proposing on whoever is leader now.
-            RaftKVNode finalLeader = findLeader(nodes);
+            TestRaftNode finalLeader = findLeader(nodes);
             assertThat(finalLeader).isNotNull();
             for (int i = 0; i < 5; i++) finalLeader.propose(("final-" + i).getBytes());
 
@@ -170,7 +170,7 @@ class LeaderTransferIntegrationTest {
         }
     }
 
-    private static void closeAll(List<RaftKVNode> nodes) {
+    private static void closeAll(List<TestRaftNode> nodes) {
         for (int i = nodes.size() - 1; i >= 0; i--) {
             try { nodes.get(i).close(); } catch (Throwable ignored) {}
         }
