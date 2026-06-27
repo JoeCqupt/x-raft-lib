@@ -6,7 +6,7 @@
  */
 package io.github.xinfra.lab.raft.tests;
 
-import io.github.xinfra.lab.raft.examples.RaftPeer;
+import io.github.xinfra.lab.raft.examples.RaftKVNode;
 import io.github.xinfra.lab.raft.tests.chaos.ChaosController;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -59,7 +59,7 @@ class ZeroCopySnapshotStreamingTest {
         Map<Long, ConcurrentLinkedQueue<String>> applyLogs = new ConcurrentHashMap<>();
         for (long id = 1; id <= 3; id++) applyLogs.put(id, new ConcurrentLinkedQueue<>());
 
-        List<RaftPeer> nodes = new ArrayList<>();
+        List<RaftKVNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
@@ -73,7 +73,7 @@ class ZeroCopySnapshotStreamingTest {
             long victim = pickFollower(nodes, leaderId);
             chaos.isolate(victim);
 
-            RaftPeer leader = findLeader(nodes);
+            RaftKVNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
             int batch = 30;
             for (int i = 0; i < batch; i++) {
@@ -91,7 +91,7 @@ class ZeroCopySnapshotStreamingTest {
             // Snapshot + compact on the connected nodes so the victim can only
             // catch up via a snapshot install; the leader's snapshot carries the
             // large payload (out-of-band, in its side-car).
-            for (RaftPeer p : nodes) {
+            for (RaftKVNode p : nodes) {
                 if (p.id != victim) {
                     p.forceSnapshotAndCompact(payload);
                 }
@@ -100,13 +100,13 @@ class ZeroCopySnapshotStreamingTest {
             // forceSnapshotAndCompact can briefly stall the event loop and
             // make the incumbent leader step down before re-winning, so wait
             // past the gap rather than snapshotting the cluster mid-election.
-            RaftPeer leaderAfterCompact = findLeaderOrWait(nodes, 5_000);
+            RaftKVNode leaderAfterCompact = findLeaderOrWait(nodes, 5_000);
             assertThat(leaderAfterCompact).as("a leader must be visible after snapshot+compact").isNotNull();
             long leaderCommit = leaderAfterCompact.basicStatus().commit;
 
             chaos.heal(victim);
 
-            RaftPeer recovered = nodes.stream().filter(p -> p.id == victim).findFirst().orElseThrow();
+            RaftKVNode recovered = nodes.stream().filter(p -> p.id == victim).findFirst().orElseThrow();
             // Raft considers the snapshot installed (commit advances) the moment
             // it processes MsgSnapshot in-memory, BUT the Storage.applySnapshot
             // write happens on the next Ready cycle when the host drains
@@ -127,7 +127,7 @@ class ZeroCopySnapshotStreamingTest {
                     .isTrue();
 
             // Inline data is empty on BOTH ends — the bytes never rode in the message.
-            RaftPeer leaderForInspection = findLeaderOrWait(nodes, 5_000);
+            RaftKVNode leaderForInspection = findLeaderOrWait(nodes, 5_000);
             assertThat(leaderForInspection).as("a leader must be visible for snapshot inspection").isNotNull();
             assertThat(leaderForInspection.storage.snapshot().getData().isEmpty())
                     .as("leader snapshot must be metadata-only").isTrue();
@@ -141,7 +141,7 @@ class ZeroCopySnapshotStreamingTest {
             assertVerifiable(sidecar, PAYLOAD_BYTES);
 
             // Cluster still makes progress post-heal on all three nodes.
-            RaftPeer leader2 = findLeader(nodes);
+            RaftKVNode leader2 = findLeader(nodes);
             assertThat(leader2).isNotNull();
             int post = 5;
             for (int i = 0; i < post; i++) {
@@ -198,8 +198,8 @@ class ZeroCopySnapshotStreamingTest {
         }
     }
 
-    private static long pickFollower(List<RaftPeer> nodes, long leaderId) {
-        for (RaftPeer p : nodes) {
+    private static long pickFollower(List<RaftKVNode> nodes, long leaderId) {
+        for (RaftKVNode p : nodes) {
             if (p.id != leaderId) return p.id;
         }
         throw new IllegalStateException("no follower found");

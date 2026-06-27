@@ -6,7 +6,7 @@
  */
 package io.github.xinfra.lab.raft.tests;
 
-import io.github.xinfra.lab.raft.examples.RaftPeer;
+import io.github.xinfra.lab.raft.examples.RaftKVNode;
 import io.github.xinfra.lab.raft.tests.chaos.ChaosController;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -46,7 +46,7 @@ class ChaosFaultInjectionIntegrationTest {
         int[] ports = freePorts(3);
         Map<Long, String> peers = peerMap(ports);
         ChaosController chaos = new ChaosController();
-        List<RaftPeer> nodes = new ArrayList<>();
+        List<RaftKVNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
@@ -61,13 +61,13 @@ class ChaosFaultInjectionIntegrationTest {
             // link but small enough to not trigger spurious elections.
             chaos.setGlobalLatency(Duration.ofMillis(50));
 
-            RaftPeer leader = findLeader(nodes);
+            RaftKVNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
             long pre = leader.basicStatus().commit;
             for (int i = 0; i < 30; i++) leader.propose(("jitter-" + i).getBytes());
 
             assertThat(awaitTrue(() -> {
-                RaftPeer l = findLeader(nodes);
+                RaftKVNode l = findLeader(nodes);
                 return l != null && l.basicStatus().commit >= pre + 30;
             }, 30_000)).as("leader must commit all proposals despite 50ms jitter").isTrue();
 
@@ -93,7 +93,7 @@ class ChaosFaultInjectionIntegrationTest {
         int[] ports = freePorts(3);
         Map<Long, String> peers = peerMap(ports);
         ChaosController chaos = new ChaosController();
-        List<RaftPeer> nodes = new ArrayList<>();
+        List<RaftKVNode> nodes = new ArrayList<>();
         try {
             List<byte[]> applied = new java.util.concurrent.CopyOnWriteArrayList<>();
             for (long id = 1; id <= 3; id++) {
@@ -106,7 +106,7 @@ class ChaosFaultInjectionIntegrationTest {
             // Every send is also re-delivered ~3ms later.
             chaos.setDuplicateProbability(1.0);
 
-            RaftPeer leader = findLeader(nodes);
+            RaftKVNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
             long pre = leader.basicStatus().commit;
             int batch = 20;
@@ -115,7 +115,7 @@ class ChaosFaultInjectionIntegrationTest {
             // Commit index must advance by exactly `batch`, not 2*batch —
             // duplicates must NOT inflate the log.
             assertThat(awaitTrue(() -> {
-                RaftPeer l = findLeader(nodes);
+                RaftKVNode l = findLeader(nodes);
                 return l != null && l.basicStatus().commit >= pre + batch;
             }, 30_000)).as("leader must commit all proposals").isTrue();
 
@@ -143,7 +143,7 @@ class ChaosFaultInjectionIntegrationTest {
         int[] ports = freePorts(3);
         Map<Long, String> peers = peerMap(ports);
         ChaosController chaos = new ChaosController();
-        List<RaftPeer> nodes = new ArrayList<>();
+        List<RaftKVNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
@@ -151,7 +151,7 @@ class ChaosFaultInjectionIntegrationTest {
                         (idx, data) -> { }, chaos));
             }
             assertThat(awaitLeader(nodes, 10_000)).isPositive();
-            RaftPeer leader = findLeader(nodes);
+            RaftKVNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
             long leaderId = leader.id;
 
@@ -166,7 +166,7 @@ class ChaosFaultInjectionIntegrationTest {
 
             // Majority quorum (leader + the OTHER follower) commits the batch.
             assertThat(awaitTrue(() -> {
-                RaftPeer l = findLeader(nodes);
+                RaftKVNode l = findLeader(nodes);
                 return l != null && l.basicStatus().commit >= pre + batch;
             }, 20_000)).as("majority must commit despite muted follower").isTrue();
 
@@ -181,7 +181,7 @@ class ChaosFaultInjectionIntegrationTest {
         }
     }
 
-    private static void closeAll(List<RaftPeer> nodes) {
+    private static void closeAll(List<RaftKVNode> nodes) {
         for (int i = nodes.size() - 1; i >= 0; i--) {
             try { nodes.get(i).close(); } catch (Throwable ignored) {}
         }

@@ -7,7 +7,7 @@
 package io.github.xinfra.lab.raft.tests;
 
 import io.github.xinfra.lab.raft.RaftStateType;
-import io.github.xinfra.lab.raft.examples.RaftPeer;
+import io.github.xinfra.lab.raft.examples.RaftKVNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -49,7 +49,7 @@ class RestartFromDiskIntegrationTest {
         ConcurrentLinkedQueue<String> phase1Apply = new ConcurrentLinkedQueue<>();
         long phase1LastApplied;
         long phase1Commit;
-        try (RaftPeer p = new RaftPeer(
+        try (RaftKVNode p = new RaftKVNode(
                 1L, ports[0], storageDir, peers, /*bootstrap=*/ true,
                 (idx, data) -> phase1Apply.add(new String(data)))) {
 
@@ -71,7 +71,7 @@ class RestartFromDiskIntegrationTest {
         // raft state, which is what we're testing for persistence.
         int[] ports2 = freePorts(1);
         Map<Long, String> peers2 = Map.of(1L, "localhost:" + ports2[0]);
-        try (RaftPeer p2 = new RaftPeer(
+        try (RaftKVNode p2 = new RaftKVNode(
                 1L, ports2[0], storageDir, peers2, /*bootstrap=*/ false,
                 (idx, data) -> phase2Apply.add(new String(data)))) {
 

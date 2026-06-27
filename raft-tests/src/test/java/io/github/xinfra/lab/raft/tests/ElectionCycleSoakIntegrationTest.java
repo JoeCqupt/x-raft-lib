@@ -7,7 +7,7 @@
 package io.github.xinfra.lab.raft.tests;
 
 import io.github.xinfra.lab.raft.RaftException;
-import io.github.xinfra.lab.raft.examples.RaftPeer;
+import io.github.xinfra.lab.raft.examples.RaftKVNode;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -51,13 +51,13 @@ class ElectionCycleSoakIntegrationTest {
 
         // Track the current port for each node (changes on restart).
         int[] currentPorts = freePorts(clusterSize);
-        List<RaftPeer> nodes = new ArrayList<>();
+        List<RaftKVNode> nodes = new ArrayList<>();
         try {
             // Bootstrap the initial cluster.
             Map<Long, String> peers = buildPeerMap(currentPorts);
             for (long id = 1; id <= clusterSize; id++) {
                 long fid = id;
-                nodes.add(new RaftPeer(fid, currentPorts[(int) (fid - 1)],
+                nodes.add(new RaftKVNode(fid, currentPorts[(int) (fid - 1)],
                         storageDirs[(int) (fid - 1)], peers, true,
                         (idx, data) -> { }));
             }
@@ -71,7 +71,7 @@ class ElectionCycleSoakIntegrationTest {
 
             for (int cycle = 0; cycle < cycles; cycle++) {
                 // Find the current leader.
-                RaftPeer leader = findLeader(nodes);
+                RaftKVNode leader = findLeader(nodes);
                 if (leader == null) {
                     assertThat(awaitLeader(nodes, 15_000)).as("leader for cycle %d", cycle).isPositive();
                     leader = findLeader(nodes);
@@ -88,7 +88,7 @@ class ElectionCycleSoakIntegrationTest {
                         break;
                     }
                 }
-                RaftPeer fLeader = leader;
+                RaftKVNode fLeader = leader;
                 awaitTrue(() -> fLeader.basicStatus().commit > preCommit, 10_000);
 
                 long commitAfterBatch = maxCommit(nodes);
@@ -104,12 +104,12 @@ class ElectionCycleSoakIntegrationTest {
 
                 // Wait for new election among survivors.
                 assertThat(awaitTrue(() -> {
-                    RaftPeer l = findLeader(nodes);
+                    RaftKVNode l = findLeader(nodes);
                     return l != null && l.id != crashedId;
                 }, 20_000)).as("new leader after crashing %d in cycle %d", crashedId, cycle).isTrue();
 
                 // Verify survivors' commit didn't regress.
-                for (RaftPeer p : nodes) {
+                for (RaftKVNode p : nodes) {
                     assertThat(p.basicStatus().commit)
                             .as("node %d commit must not regress in cycle %d", p.id, cycle)
                             .isGreaterThanOrEqualTo(maxCommitSeen - 1);
@@ -121,11 +121,11 @@ class ElectionCycleSoakIntegrationTest {
                 Map<Long, String> updatedPeers = buildPeerMap(currentPorts);
 
                 // Update surviving nodes' transport to know the new address.
-                for (RaftPeer p : nodes) {
+                for (RaftKVNode p : nodes) {
                     p.transport.addPeer(crashedId, updatedPeers.get(crashedId));
                 }
 
-                RaftPeer restarted = new RaftPeer(crashedId,
+                RaftKVNode restarted = new RaftKVNode(crashedId,
                         storageDirs[(int) (crashedId - 1)],
                         updatedPeers, false,
                         (idx, data) -> { },
@@ -163,13 +163,13 @@ class ElectionCycleSoakIntegrationTest {
         return m;
     }
 
-    private static long maxCommit(List<RaftPeer> nodes) {
+    private static long maxCommit(List<RaftKVNode> nodes) {
         long max = 0;
-        for (RaftPeer p : nodes) max = Math.max(max, p.basicStatus().commit);
+        for (RaftKVNode p : nodes) max = Math.max(max, p.basicStatus().commit);
         return max;
     }
 
-    private static void closeAll(List<RaftPeer> nodes) {
+    private static void closeAll(List<RaftKVNode> nodes) {
         for (int i = nodes.size() - 1; i >= 0; i--) {
             try { nodes.get(i).close(); } catch (Throwable ignored) {}
         }

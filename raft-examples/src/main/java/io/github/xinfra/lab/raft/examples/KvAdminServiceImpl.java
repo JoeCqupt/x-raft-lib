@@ -73,7 +73,7 @@ class KvAdminServiceImpl extends KvAdminServiceGrpc.KvAdminServiceImplBase {
     @Override
     public void getClusterInfo(GetClusterInfoRequest request, StreamObserver<GetClusterInfoResponse> responseObserver) {
         Node.BasicStatus bs = server.status();
-        Eraftpb.ConfState cs = server.raftPeer().storage.initialState().confState();
+        Eraftpb.ConfState cs = server.raftKvNode().storage.initialState().confState();
 
         responseObserver.onNext(GetClusterInfoResponse.newBuilder()
                 .setLeaderId(bs.lead)

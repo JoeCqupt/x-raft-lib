@@ -9,7 +9,7 @@ package io.github.xinfra.lab.raft.tests;
 import io.github.xinfra.lab.raft.RaftException;
 import com.google.protobuf.InvalidProtocolBufferException;
 import io.github.xinfra.lab.raft.examples.proto.KvCommand;
-import io.github.xinfra.lab.raft.examples.RaftPeer;
+import io.github.xinfra.lab.raft.examples.RaftKVNode;
 import io.github.xinfra.lab.raft.tests.chaos.ChaosController;
 import io.github.xinfra.lab.raft.tests.linearizability.History;
 import io.github.xinfra.lab.raft.tests.linearizability.LinearizabilityChecker;
@@ -106,7 +106,7 @@ class KvLinearizabilityIntegrationTest {
         // applied" rather than "merely accepted by propose()".
         Map<String, CompletableFuture<Long>> applyFutures = new ConcurrentHashMap<>();
 
-        List<RaftPeer> nodes = new ArrayList<>();
+        List<RaftKVNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
@@ -151,7 +151,7 @@ class KvLinearizabilityIntegrationTest {
      * that by tagging each command with a unique id, registering a
      * future, and waiting for the apply callback to complete it.
      */
-    private History runMixedWorkload(List<RaftPeer> nodes,
+    private History runMixedWorkload(List<RaftKVNode> nodes,
                                      Map<Long, Map<String, String>> nodeStates,
                                      Map<Long, AtomicLong> appliedHigh,
                                      Map<String, CompletableFuture<Long>> applyFutures) throws Exception {
@@ -265,11 +265,11 @@ class KvLinearizabilityIntegrationTest {
      * spurious linearizability violations against an asynchronous
      * apply log.)
      */
-    private static String readAfterCatchUp(List<RaftPeer> nodes,
+    private static String readAfterCatchUp(List<RaftKVNode> nodes,
                                            Map<Long, Map<String, String>> nodeStates,
                                            Map<Long, AtomicLong> appliedHigh,
                                            String key) throws InterruptedException {
-        RaftPeer leader = findLeader(nodes);
+        RaftKVNode leader = findLeader(nodes);
         if (leader == null) return null;
         long target = leader.basicStatus().commit;
         AtomicLong applied = appliedHigh.get(leader.id);
@@ -288,7 +288,7 @@ class KvLinearizabilityIntegrationTest {
      * subsequent GET could legitimately observe the old value, breaking
      * linearizability under the per-client real-time order.
      */
-    private static void proposeAndAwaitApply(List<RaftPeer> nodes,
+    private static void proposeAndAwaitApply(List<RaftKVNode> nodes,
                                              KvCommand cmd,
                                              String cmdId,
                                              Map<String, CompletableFuture<Long>> applyFutures)
@@ -304,10 +304,10 @@ class KvLinearizabilityIntegrationTest {
     }
 
     /** Retry propose across leader changes. */
-    private static void proposeOnLeader(List<RaftPeer> nodes, KvCommand cmd) throws InterruptedException {
+    private static void proposeOnLeader(List<RaftKVNode> nodes, KvCommand cmd) throws InterruptedException {
         long deadline = System.currentTimeMillis() + 10_000;
         while (System.currentTimeMillis() < deadline) {
-            RaftPeer leader = findLeader(nodes);
+            RaftKVNode leader = findLeader(nodes);
             if (leader != null) {
                 try {
                     leader.propose(cmd.toByteArray());
@@ -321,7 +321,7 @@ class KvLinearizabilityIntegrationTest {
         throw new IllegalStateException("could not propose within timeout");
     }
 
-    private static void closeAll(List<RaftPeer> nodes) {
+    private static void closeAll(List<RaftKVNode> nodes) {
         for (int i = nodes.size() - 1; i >= 0; i--) {
             try { nodes.get(i).close(); } catch (Throwable ignored) {}
         }

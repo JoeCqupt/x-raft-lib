@@ -150,7 +150,7 @@ class KvServerIntegrationTest {
 
             for (KvServer s : servers) {
                 if (s.status().id != joinerId) {
-                    s.raftPeer().transport.addPeer(joinerId, allPeers.get(joinerId));
+                    s.raftKvNode().transport.addPeer(joinerId, allPeers.get(joinerId));
                 }
             }
 
@@ -165,7 +165,7 @@ class KvServerIntegrationTest {
                     .get(30, TimeUnit.SECONDS);
 
             assertThat(awaitTrue(() -> {
-                var cs = newLeader.raftPeer().storage.initialState().confState();
+                var cs = newLeader.raftKvNode().storage.initialState().confState();
                 return cs.getVotersList().contains(joinerId) && cs.getVotersCount() == 4;
             }, 15_000)).as("node promoted to voter").isTrue();
 
@@ -204,7 +204,7 @@ class KvServerIntegrationTest {
 
             for (KvServer s : servers) {
                 if (s.status().id != joinerId) {
-                    s.raftPeer().transport.addPeer(joinerId, restartPeers.get(joinerId));
+                    s.raftKvNode().transport.addPeer(joinerId, restartPeers.get(joinerId));
                 }
             }
 

@@ -8,7 +8,7 @@ package io.github.xinfra.lab.raft.tests;
 
 import io.github.xinfra.lab.raft.Node;
 import io.github.xinfra.lab.raft.RaftStateType;
-import io.github.xinfra.lab.raft.examples.RaftPeer;
+import io.github.xinfra.lab.raft.examples.RaftKVNode;
 import io.github.xinfra.lab.raft.tests.chaos.ChaosController;
 import io.github.xinfra.lab.raft.tests.chaos.ChaosTransport;
 import io.github.xinfra.lab.raft.transport.grpc.GrpcTransport;
@@ -69,10 +69,10 @@ final class IntegrationTestSupport {
     }
 
     /** Wait until at least one peer is in StateLeader; returns its id, or 0 on timeout. */
-    static long awaitLeader(Iterable<RaftPeer> peers, long timeoutMillis) throws InterruptedException {
+    static long awaitLeader(Iterable<RaftKVNode> peers, long timeoutMillis) throws InterruptedException {
         AtomicLong leader = new AtomicLong();
         boolean ok = awaitTrue(() -> {
-            for (RaftPeer p : peers) {
+            for (RaftKVNode p : peers) {
                 if (p.basicStatus().state == RaftStateType.StateLeader) {
                     leader.set(p.id);
                     return true;
@@ -84,12 +84,12 @@ final class IntegrationTestSupport {
     }
 
     /**
-     * Build a {@link RaftPeer} whose gRPC transport is wrapped in a
+     * Build a {@link RaftKVNode} whose gRPC transport is wrapped in a
      * {@link ChaosTransport} sharing {@code controller}, so the test can drop
      * / partition this node's traffic. {@code ports} is the full cluster's
      * port array; this node's port is {@code ports[id-1]}.
      */
-    static RaftPeer chaosPeer(long id,
+    static RaftKVNode chaosPeer(long id,
                               int[] ports,
                               Map<Long, String> peerAddresses,
                               Path storageDir,
@@ -98,12 +98,12 @@ final class IntegrationTestSupport {
                               ChaosController controller) throws Exception {
         GrpcTransport inner = new GrpcTransport(id, ports[(int) (id - 1)]);
         ChaosTransport chaos = new ChaosTransport(id, inner, controller);
-        return new RaftPeer(id, storageDir, peerAddresses, bootstrap, applyCallback, chaos);
+        return new RaftKVNode(id, storageDir, peerAddresses, bootstrap, applyCallback, chaos);
     }
 
     /** Find the (single, best-effort) peer currently reporting StateLeader, or null. */
-    static RaftPeer findLeader(Iterable<RaftPeer> peers) {
-        for (RaftPeer p : peers) {
+    static RaftKVNode findLeader(Iterable<RaftKVNode> peers) {
+        for (RaftKVNode p : peers) {
             if (p.basicStatus().state == RaftStateType.StateLeader) return p;
         }
         return null;
@@ -118,10 +118,10 @@ final class IntegrationTestSupport {
      * snapshot returns null at that exact instant, which then NPEs the
      * caller — this helper waits past the gap.
      */
-    static RaftPeer findLeaderOrWait(Iterable<RaftPeer> peers, long waitMillis) throws InterruptedException {
+    static RaftKVNode findLeaderOrWait(Iterable<RaftKVNode> peers, long waitMillis) throws InterruptedException {
         long deadline = System.currentTimeMillis() + waitMillis;
         while (true) {
-            RaftPeer p = findLeader(peers);
+            RaftKVNode p = findLeader(peers);
             if (p != null) return p;
             if (System.currentTimeMillis() >= deadline) return null;
             Thread.sleep(20);
@@ -129,10 +129,10 @@ final class IntegrationTestSupport {
     }
 
     /** Wait until the basicStatus().lead converges to a single non-zero value across all peers. */
-    static boolean awaitConvergedLeader(Iterable<RaftPeer> peers, long timeoutMillis) throws InterruptedException {
+    static boolean awaitConvergedLeader(Iterable<RaftKVNode> peers, long timeoutMillis) throws InterruptedException {
         return awaitTrue(() -> {
             long lead = -1;
-            for (RaftPeer p : peers) {
+            for (RaftKVNode p : peers) {
                 Node.BasicStatus s = p.basicStatus();
                 if (s.lead == 0) return false;
                 if (lead == -1) lead = s.lead;

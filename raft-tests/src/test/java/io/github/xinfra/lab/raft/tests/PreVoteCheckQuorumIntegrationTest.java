@@ -7,7 +7,7 @@
 package io.github.xinfra.lab.raft.tests;
 
 import io.github.xinfra.lab.raft.RaftStateType;
-import io.github.xinfra.lab.raft.examples.RaftPeer;
+import io.github.xinfra.lab.raft.examples.RaftKVNode;
 import io.github.xinfra.lab.raft.tests.chaos.ChaosController;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * End-to-end tests for PreVote and CheckQuorum over real gRPC + RocksDB.
  *
- * <p>Note: {@link RaftPeer} enables both preVote and checkQuorum by default,
+ * <p>Note: {@link RaftKVNode} enables both preVote and checkQuorum by default,
  * which is the recommended production configuration.
  */
 class PreVoteCheckQuorumIntegrationTest {
@@ -49,7 +49,7 @@ class PreVoteCheckQuorumIntegrationTest {
         Map<Long, String> peers = peerMap(ports);
         ChaosController chaos = new ChaosController();
 
-        List<RaftPeer> nodes = new ArrayList<>();
+        List<RaftKVNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
@@ -61,7 +61,7 @@ class PreVoteCheckQuorumIntegrationTest {
             assertThat(leaderId).isPositive();
 
             // Record the term before isolation
-            RaftPeer leader = findLeader(nodes);
+            RaftKVNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
 
             // Propose some data to advance the log
@@ -76,7 +76,7 @@ class PreVoteCheckQuorumIntegrationTest {
 
             // Pick a non-leader node and isolate it
             long isolatedId = 0;
-            for (RaftPeer p : nodes) {
+            for (RaftKVNode p : nodes) {
                 if (p.id != leaderId) { isolatedId = p.id; break; }
             }
             assertThat(isolatedId).isPositive();
@@ -88,7 +88,7 @@ class PreVoteCheckQuorumIntegrationTest {
 
             // Meanwhile, the majority keeps committing
             for (int i = 0; i < 5; i++) {
-                RaftPeer l = findLeaderOrWait(nodes, 5_000);
+                RaftKVNode l = findLeaderOrWait(nodes, 5_000);
                 if (l != null) l.propose(("during-iso-" + i).getBytes());
             }
 
@@ -120,7 +120,7 @@ class PreVoteCheckQuorumIntegrationTest {
         Map<Long, String> peers = peerMap(ports);
         ChaosController chaos = new ChaosController();
 
-        List<RaftPeer> nodes = new ArrayList<>();
+        List<RaftKVNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
@@ -130,7 +130,7 @@ class PreVoteCheckQuorumIntegrationTest {
 
             long leaderId = awaitLeader(nodes, 10_000);
             assertThat(leaderId).isPositive();
-            RaftPeer leader = findLeader(nodes);
+            RaftKVNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
 
             // Isolate the leader from everyone
@@ -144,8 +144,8 @@ class PreVoteCheckQuorumIntegrationTest {
                     .as("isolated leader must step down via CheckQuorum").isTrue();
 
             // The remaining two nodes should elect a new leader
-            List<RaftPeer> survivors = new ArrayList<>();
-            for (RaftPeer p : nodes) {
+            List<RaftKVNode> survivors = new ArrayList<>();
+            for (RaftKVNode p : nodes) {
                 if (p.id != leaderId) survivors.add(p);
             }
             long newLeader = awaitLeader(survivors, 15_000);
@@ -174,11 +174,11 @@ class PreVoteCheckQuorumIntegrationTest {
         int[] ports = freePorts(3);
         Map<Long, String> peers = peerMap(ports);
 
-        List<RaftPeer> nodes = new ArrayList<>();
+        List<RaftKVNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
-                nodes.add(new RaftPeer(fid, ports[(int) (fid - 1)],
+                nodes.add(new RaftKVNode(fid, ports[(int) (fid - 1)],
                         tmp.resolve("p" + fid), peers, true,
                         (idx, data) -> {}));
             }
@@ -186,7 +186,7 @@ class PreVoteCheckQuorumIntegrationTest {
             long leaderId = awaitLeader(nodes, 10_000);
             assertThat(leaderId).as("PreVote cluster must elect leader").isPositive();
 
-            RaftPeer leader = findLeader(nodes);
+            RaftKVNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
             for (int i = 0; i < 10; i++) {
                 leader.propose(("pv-" + i).getBytes());
@@ -200,7 +200,7 @@ class PreVoteCheckQuorumIntegrationTest {
         }
     }
 
-    private static void closeAll(List<RaftPeer> nodes) {
+    private static void closeAll(List<RaftKVNode> nodes) {
         for (int i = nodes.size() - 1; i >= 0; i--) {
             try { nodes.get(i).close(); } catch (Throwable ignored) {}
         }

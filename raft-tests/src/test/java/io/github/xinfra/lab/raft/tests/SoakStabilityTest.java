@@ -7,7 +7,7 @@
 package io.github.xinfra.lab.raft.tests;
 
 import io.github.xinfra.lab.raft.RaftException;
-import io.github.xinfra.lab.raft.examples.RaftPeer;
+import io.github.xinfra.lab.raft.examples.RaftKVNode;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -45,11 +45,11 @@ class SoakStabilityTest {
         int[] ports = freePorts(3);
         Map<Long, String> peers = peerMap(ports);
 
-        List<RaftPeer> nodes = new ArrayList<>();
+        List<RaftKVNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
-                nodes.add(new RaftPeer(fid, ports[(int) (fid - 1)],
+                nodes.add(new RaftKVNode(fid, ports[(int) (fid - 1)],
                         tmp.resolve("p" + fid), peers, true, (idx, data) -> { }));
             }
 
@@ -68,7 +68,7 @@ class SoakStabilityTest {
             int round = 0;
 
             while (System.currentTimeMillis() < deadline) {
-                RaftPeer leader = findLeader(nodes);
+                RaftKVNode leader = findLeader(nodes);
                 if (leader == null) {
                     // Re-elect window; back off briefly.
                     Thread.sleep(50);
@@ -158,9 +158,9 @@ class SoakStabilityTest {
         }
     }
 
-    private static long maxCommit(List<RaftPeer> nodes) {
+    private static long maxCommit(List<RaftKVNode> nodes) {
         long max = 0;
-        for (RaftPeer p : nodes) max = Math.max(max, p.basicStatus().commit);
+        for (RaftKVNode p : nodes) max = Math.max(max, p.basicStatus().commit);
         return max;
     }
 }

@@ -6,7 +6,7 @@
  */
 package io.github.xinfra.lab.raft.tests;
 
-import io.github.xinfra.lab.raft.examples.RaftPeer;
+import io.github.xinfra.lab.raft.examples.RaftKVNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -47,12 +47,12 @@ class ThreeNodeClusterIntegrationTest {
             applyLogs.put(id, new ConcurrentLinkedQueue<>());
         }
 
-        List<RaftPeer> nodes = new ArrayList<>();
+        List<RaftKVNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
                 ConcurrentLinkedQueue<byte[]> log = applyLogs.get(fid);
-                RaftPeer p = new RaftPeer(
+                RaftKVNode p = new RaftKVNode(
                         fid,
                         ports[(int) (fid - 1)],
                         tmp.resolve("p" + fid),
@@ -73,7 +73,7 @@ class ThreeNodeClusterIntegrationTest {
             // 3. Propose a batch through the leader. The host's apply
             //    callback runs on each peer's applier thread, so the
             //    queues should grow on all three.
-            RaftPeer leader = findLeader(nodes);
+            RaftKVNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
             int batch = 20;
             for (int i = 0; i < batch; i++) {
@@ -115,18 +115,18 @@ class ThreeNodeClusterIntegrationTest {
         int[] ports = freePorts(3);
         Map<Long, String> peers = peerMap(ports);
 
-        List<RaftPeer> nodes = new ArrayList<>();
+        List<RaftKVNode> nodes = new ArrayList<>();
         try {
             for (long id = 1; id <= 3; id++) {
                 long fid = id;
-                nodes.add(new RaftPeer(fid, ports[(int) (fid - 1)],
+                nodes.add(new RaftKVNode(fid, ports[(int) (fid - 1)],
                         tmp.resolve("p" + fid), peers, true,
                         (idx, data) -> { }));
             }
 
             long leaderId = awaitLeader(nodes, 10_000);
             assertThat(leaderId).isPositive();
-            RaftPeer leader = findLeader(nodes);
+            RaftKVNode leader = findLeader(nodes);
             assertThat(leader).isNotNull();
 
             long preCommit = leader.basicStatus().commit;
