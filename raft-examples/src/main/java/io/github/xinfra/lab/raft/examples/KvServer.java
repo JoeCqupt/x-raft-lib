@@ -42,6 +42,8 @@ public final class KvServer implements AutoCloseable {
                 .build()
                 .start();
 
+        raftKvNode.onRemoved().thenRun(this::close);
+
         LOG.info("KvServer node {} started: raft={}, kv={}", nodeId, raftPort, kvPort);
     }
 

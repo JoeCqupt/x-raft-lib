@@ -19,7 +19,6 @@ import io.github.xinfra.lab.raft.Transport;
 import io.github.xinfra.lab.raft.examples.proto.KvCommand;
 import io.github.xinfra.lab.raft.proto.Eraftpb;
 import io.github.xinfra.lab.raft.storage.rocksdb.RocksDbStorage;
-import io.github.xinfra.lab.raft.transport.grpc.GrpcTransport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,6 +39,10 @@ import java.util.concurrent.atomic.AtomicLong;
 public class RaftKVNode implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(RaftKVNode.class);
+
+    private static class ApplyFailureException extends RuntimeException {
+        ApplyFailureException(String msg, Throwable cause) { super(msg, cause); }
+    }
 
     private static final long SNAPSHOT_ENTRIES_THRESHOLD = 10_000;
     private static final int MAX_CONSECUTIVE_ERRORS = 5;
@@ -70,6 +73,8 @@ public class RaftKVNode implements AutoCloseable {
 
     private final ConcurrentHashMap<Long, CompletableFuture<Eraftpb.ConfState>> pendingConfChanges = new ConcurrentHashMap<>();
     private final AtomicLong confChangeIdGen = new AtomicLong(0);
+
+    private final CompletableFuture<Void> removedFuture = new CompletableFuture<>();
 
     public RaftKVNode(long id,
                       Path storageDir,
@@ -251,6 +256,10 @@ public class RaftKVNode implements AutoCloseable {
         return node.basicStatus();
     }
 
+    public CompletableFuture<Void> onRemoved() {
+        return removedFuture;
+    }
+
     // ==================== Ready Loop ====================
 
     private void readyLoop() {
@@ -264,6 +273,10 @@ public class RaftKVNode implements AutoCloseable {
                     Thread.currentThread().interrupt();
                     break;
                 } catch (Exception e) {
+                    if (e instanceof ApplyFailureException) {
+                        LOG.error("fatal: apply failure, node must stop", e);
+                        break;
+                    }
                     consecutiveErrors++;
                     LOG.error("readyLoop error ({}/{})", consecutiveErrors, MAX_CONSECUTIVE_ERRORS, e);
                     if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
@@ -378,6 +391,7 @@ public class RaftKVNode implements AutoCloseable {
                 if (future != null) future.complete(null);
             } catch (Exception ex) {
                 if (future != null) future.completeExceptionally(ex);
+                throw ex;
             }
             return;
         }
@@ -389,7 +403,9 @@ public class RaftKVNode implements AutoCloseable {
             KvCommand cmd = KvCommand.parseFrom(cmdBytes);
             stateMachine.apply(index, cmd);
         } catch (InvalidProtocolBufferException e) {
-            throw new IllegalStateException("failed to parse KvCommand at index " + index, e);
+            throw new ApplyFailureException(
+                    "FATAL: failed to parse committed entry at index " + index
+                    + ", state machine may be inconsistent, node must stop", e);
         }
     }
 
@@ -405,6 +421,7 @@ public class RaftKVNode implements AutoCloseable {
         storage.setConfState(cs);
         updateTransportPeers(v2);
         completeConfChangeFuture(cc.getContext(), cs);
+        checkSelfRemoval(v2, cs);
     }
 
     private void applyConfChangeV2(Eraftpb.Entry e) throws InvalidProtocolBufferException, InterruptedException {
@@ -413,6 +430,27 @@ public class RaftKVNode implements AutoCloseable {
         storage.setConfState(cs);
         updateTransportPeers(cc);
         completeConfChangeFuture(cc.getContext(), cs);
+        checkSelfRemoval(cc, cs);
+    }
+
+    private void checkSelfRemoval(Eraftpb.ConfChangeV2 cc, Eraftpb.ConfState cs) {
+        boolean removingSelf = false;
+        for (Eraftpb.ConfChangeSingle change : cc.getChangesList()) {
+            if (change.getNodeId() == id
+                    && change.getType() == Eraftpb.ConfChangeType.ConfChangeRemoveNode) {
+                removingSelf = true;
+                break;
+            }
+        }
+        if (!removingSelf) return;
+
+        if (!cs.getVotersList().contains(id)
+                && !cs.getLearnersList().contains(id)
+                && !cs.getVotersOutgoingList().contains(id)) {
+            LOG.info("node {} removed from cluster, shutting down", id);
+            removedFuture.complete(null);
+            running = false;
+        }
     }
 
     private void updateTransportPeers(Eraftpb.ConfChangeV2 cc) {
