@@ -237,19 +237,22 @@ public class DefaultNode implements Node {
                     if (!(ev instanceof WakeEvent)) {
                         dispatch(r, ev);
                     }
-                    // Drain remaining pending events without blocking, up to
-                    // maxDrainPerCycle. Batching events into one Ready cycle
-                    // reduces storage fsyncs — but draining the entire queue
-                    // (up to 1024) in one shot can balloon the unstable log
-                    // and make the subsequent fsync so slow that the node
-                    // starves. Capping at 128 keeps batches bounded; leftover
-                    // events stay in the queue for the next iteration.
-                    int drained = 0;
-                    while (drained < maxDrainPerCycle && (ev = events.poll()) != null) {
-                        if (!(ev instanceof WakeEvent)) {
-                            dispatch(r, ev);
+                    // Drain remaining pending events without blocking — but
+                    // only when we can emit a Ready to flush the results.
+                    // During waitingAdvance the previous Ready hasn't been
+                    // written yet; draining more events just balloons the
+                    // unstable log, making the NEXT writeBatched even slower
+                    // and creating a starvation spiral.  Skipping the drain
+                    // keeps the loop responsive to advance/tick/heartbeat
+                    // while bounding unstable-log growth to 1 event per take.
+                    if (!waitingAdvance) {
+                        int drained = 0;
+                        while (drained < maxDrainPerCycle && (ev = events.poll()) != null) {
+                            if (!(ev instanceof WakeEvent)) {
+                                dispatch(r, ev);
+                            }
+                            drained++;
                         }
-                        drained++;
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
