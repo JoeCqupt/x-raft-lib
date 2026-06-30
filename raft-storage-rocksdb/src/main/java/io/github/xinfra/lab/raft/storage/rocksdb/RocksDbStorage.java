@@ -217,8 +217,14 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     }
 
     private void exitLock() {
+        long heldNs = lockHeldSince == 0 ? 0 : System.nanoTime() - lockHeldSince;
+        long heldMs = heldNs / 1_000_000;
+        String holder = lockHolder;
         lockHolder = "none";
         lockHeldSince = 0;
+        if (heldMs > 100) {
+            LOG.warn("lock held too long by {}: {}ms", holder, heldMs);
+        }
     }
 
     // ====================== Storage read API ======================
