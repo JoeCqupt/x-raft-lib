@@ -65,6 +65,13 @@ public class DefaultNode implements Node {
     private static final int TICK_BURST_LIMIT = 128;
     private final AtomicInteger pendingTicks = new AtomicInteger(0);
 
+    // ---- Advance signal (out-of-band, never competes for queue slots) ----
+    // Set by the readyLoop thread (advance()), checked and cleared by the
+    // event-loop thread every iteration. A lightweight WakeEvent is offered
+    // into the events queue to unpark a blocked take(), but the flag is the
+    // authority — the WakeEvent is just a wake-up hint.
+    private final AtomicBoolean advancePending = new AtomicBoolean(false);
+
     // ---- Output channel: Ready emissions from loop to consumer ----
     // Unbounded so loop's put never blocks. In sync mode waitingAdvance gates
     // emission to at most one in flight; in async mode the consumer is
@@ -168,6 +175,14 @@ public class DefaultNode implements Node {
         try {
             while (!stopped.get()) {
                 try {
+                    // Process out-of-band advance flag before checking Ready.
+                    if (advancePending.compareAndSet(true, false)) {
+                        if (waitingAdvance) {
+                            rn.advance(null);
+                            waitingAdvance = false;
+                        }
+                    }
+
                     // Emit Ready if available and not waiting for Advance.
                     // readyc is unbounded so put never blocks the loop.
                     if (!waitingAdvance && rn.hasReady()) {
@@ -211,15 +226,8 @@ public class DefaultNode implements Node {
 
                     // Block until next event (true event-driven; no idle polling).
                     Event ev = events.take();
-                    // AdvanceEvent gates Ready emission, so it owns waitingAdvance.
-                    // All other events are stateless w.r.t. the loop and handed off
-                    // to dispatch().
-                    if (ev instanceof AdvanceEvent) {
-                        if (waitingAdvance) {
-                            rn.advance(null);
-                            waitingAdvance = false;
-                        }
-                        // Spurious advance (no Ready in flight) is ignored.
+                    if (ev instanceof WakeEvent) {
+                        // Wake-up hint only; advance is handled by the flag above.
                     } else {
                         dispatch(r, ev);
                     }
@@ -382,7 +390,7 @@ public class DefaultNode implements Node {
             } else if (ev instanceof ConfChangeEvent cce) {
                 cce.reply.complete(Eraftpb.ConfState.getDefaultInstance());
             }
-            // tick / advance / recv: nothing waiting on a result, discard.
+            // tick / wake / recv: nothing waiting on a result, discard.
         }
     }
 
@@ -483,7 +491,8 @@ public class DefaultNode implements Node {
     @Override
     public void advance() throws InterruptedException {
         if (done) return;
-        events.put(AdvanceEvent.INSTANCE);
+        advancePending.set(true);
+        events.offer(WakeEvent.INSTANCE);
     }
 
     @Override
@@ -652,16 +661,16 @@ public class DefaultNode implements Node {
 
     // ---- Event types ----
 
-    sealed interface Event permits TickEvent, AdvanceEvent, ProposeEvent, RecvEvent, ConfChangeEvent, StatusEvent {}
+    sealed interface Event permits TickEvent, WakeEvent, ProposeEvent, RecvEvent, ConfChangeEvent, StatusEvent {}
 
     static final class TickEvent implements Event {
         static final TickEvent INSTANCE = new TickEvent();
         private TickEvent() {}
     }
 
-    static final class AdvanceEvent implements Event {
-        static final AdvanceEvent INSTANCE = new AdvanceEvent();
-        private AdvanceEvent() {}
+    static final class WakeEvent implements Event {
+        static final WakeEvent INSTANCE = new WakeEvent();
+        private WakeEvent() {}
     }
 
     static final class ProposeEvent implements Event {
