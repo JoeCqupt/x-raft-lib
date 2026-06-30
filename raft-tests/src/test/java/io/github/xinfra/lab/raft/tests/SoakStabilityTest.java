@@ -106,11 +106,12 @@ class SoakStabilityTest {
                 }
 
                 // Every ~3s, sample commit. The actual liveness assertion is
-                // "no 30-second window passes without commit advancing".
-                // 2-core CI runners with 3 raft nodes + RocksDB + gRPC
-                // routinely stall 10-15s under CPU contention and GC
-                // pressure; 30s catches a real deadlock without false
-                // positives.
+                // "no 15-second window passes without commit advancing". A
+                // stricter per-3s check fails on slow CI runners where a
+                // single forceSnapshotAndCompact + leader re-election can
+                // legitimately stall progress for ~5s without indicating a
+                // deadlock — the soak's job is to catch wedged loops, not
+                // measure throughput.
                 long now = System.currentTimeMillis();
                 if (now - lastProgressCheck > 3_000) {
                     long commit = maxCommit(nodes);
@@ -119,8 +120,8 @@ class SoakStabilityTest {
                         lastSawProgressAt = now;
                     } else {
                         assertThat(now - lastSawProgressAt)
-                                .as("commit (%d) must advance within 30s — wedged loop?", commit)
-                                .isLessThan(30_000);
+                                .as("commit (%d) must advance within 15s — wedged loop?", commit)
+                                .isLessThan(15_000);
                     }
                     lastProgressCheck = now;
                 }
