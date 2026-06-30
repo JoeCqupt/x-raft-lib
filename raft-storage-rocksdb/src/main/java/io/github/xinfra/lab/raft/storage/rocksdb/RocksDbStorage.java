@@ -839,7 +839,9 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                     long snapIdx = snap.getMetadata().getIndex();
                     wb.deleteRange(cfLog, indexKey(0), indexKey(snapIdx + 1));
                 }
-                db.write(writeOpts, wb);
+                if (wb.count() > 0) {
+                    db.write(writeOpts, wb);
+                }
             } catch (RocksDBException e) {
                 throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
                         "rocksdb writeBatched failed", e);

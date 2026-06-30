@@ -65,6 +65,14 @@ public class DefaultNode implements Node {
     private static final int TICK_BURST_LIMIT = 128;
     private final AtomicInteger pendingTicks = new AtomicInteger(0);
 
+    // Cap the number of events drained per Ready cycle. Without a cap, the
+    // drain loop can consume all 1024 queued events (e.g. a burst of 256
+    // MsgApp from the leader), inflating the unstable log so much that the
+    // subsequent writeBatched fsync takes seconds — triggering a starvation
+    // spiral where the node can never advance fast enough to keep up.
+    private static final int DEFAULT_MAX_DRAIN_PER_CYCLE = 128;
+    private final int maxDrainPerCycle = DEFAULT_MAX_DRAIN_PER_CYCLE;
+
     // ---- Advance signal (out-of-band, never competes for queue slots) ----
     // Set by the readyLoop thread (advance()), checked and cleared by the
     // event-loop thread every iteration. A lightweight WakeEvent is offered
@@ -229,14 +237,19 @@ public class DefaultNode implements Node {
                     if (!(ev instanceof WakeEvent)) {
                         dispatch(r, ev);
                     }
-                    // Drain all remaining pending events without blocking.
-                    // Batching N events into one Ready cycle reduces storage
-                    // fsyncs from N to 1 — critical on slow-I/O CI runners
-                    // where per-fsync latency dominates the Ready pipeline.
-                    while ((ev = events.poll()) != null) {
+                    // Drain remaining pending events without blocking, up to
+                    // maxDrainPerCycle. Batching events into one Ready cycle
+                    // reduces storage fsyncs — but draining the entire queue
+                    // (up to 1024) in one shot can balloon the unstable log
+                    // and make the subsequent fsync so slow that the node
+                    // starves. Capping at 128 keeps batches bounded; leftover
+                    // events stay in the queue for the next iteration.
+                    int drained = 0;
+                    while (drained < maxDrainPerCycle && (ev = events.poll()) != null) {
                         if (!(ev instanceof WakeEvent)) {
                             dispatch(r, ev);
                         }
+                        drained++;
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
