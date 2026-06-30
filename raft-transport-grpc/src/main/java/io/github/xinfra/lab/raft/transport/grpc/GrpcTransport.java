@@ -293,6 +293,7 @@ public class GrpcTransport implements Transport {
         volatile ManagedChannel channel;
         volatile RaftTransportServiceGrpc.RaftTransportServiceBlockingStub blockingStub;
         volatile RaftTransportServiceGrpc.RaftTransportServiceStub asyncStub;
+        private boolean poisoned;
 
         PeerChannel(long peerId, String address) {
             this.peerId = peerId;
@@ -300,6 +301,7 @@ public class GrpcTransport implements Transport {
         }
 
         synchronized void ensureOpen() {
+            if (poisoned) return;
             if (channel != null && !channel.isShutdown()) return;
             NettyChannelBuilder builder = NettyChannelBuilder.forTarget(address);
             if (tls != null) {
@@ -320,6 +322,7 @@ public class GrpcTransport implements Transport {
         void send(Eraftpb.Message msg) {
             try {
                 ensureOpen();
+                if (poisoned) return;
                 if (msg.getMsgType() == Eraftpb.MessageType.MsgSnapshot) {
                     sendSnapshot(msg);
                 } else {
@@ -505,6 +508,7 @@ public class GrpcTransport implements Transport {
         }
 
         synchronized void shutdown() {
+            poisoned = true;
             ManagedChannel ch = channel;
             if (ch != null) {
                 try {
