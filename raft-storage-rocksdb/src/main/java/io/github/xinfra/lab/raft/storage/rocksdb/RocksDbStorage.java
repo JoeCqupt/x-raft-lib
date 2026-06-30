@@ -799,6 +799,7 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                              Eraftpb.HardState hs,
                              Eraftpb.Snapshot snap) {
         synchronized (lock) {
+            long tStart = System.nanoTime();
             boolean snapApplied = snap != null && !isEmptySnap(snap);
             // Side-car file name to LINK when finalizing an out-of-band snapshot
             // whose payload was already staged durably via stageSnapshotData; null
@@ -822,6 +823,11 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                 }
             }
             String prevFile = snapApplied ? readSnapshotFileName() : null;
+            long tPrepSnapDone = System.nanoTime();
+
+            int batchCount = 0;
+            long tBuildBatchDone;
+            long tDbWriteDone;
             try (WriteBatch wb = new WriteBatch()) {
                 if (entries != null && !entries.isEmpty()) appendIntoBatch(wb, entries);
                 if (hs != null && !isEmptyHardState(hs)) {
@@ -837,30 +843,76 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                         wb.delete(cfState, KEY_SNAPSHOT_FILE);
                     }
                     long snapIdx = snap.getMetadata().getIndex();
+                    long tDeleteRange = System.nanoTime();
                     wb.deleteRange(cfLog, indexKey(0), indexKey(snapIdx + 1));
+                    long deleteRangeMs = (System.nanoTime() - tDeleteRange) / 1_000_000;
+                    if (deleteRangeMs > 50) {
+                        LOG.debug("snapshot log truncation deleteRange(0, {}) took {}ms",
+                                snapIdx + 1, deleteRangeMs);
+                    }
                 }
-                if (wb.count() > 0) {
+                tBuildBatchDone = System.nanoTime();
+                batchCount = wb.count();
+                if (batchCount > 0) {
                     db.write(writeOpts, wb);
                 }
+                tDbWriteDone = System.nanoTime();
             } catch (RocksDBException e) {
                 throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
                         "rocksdb writeBatched failed", e);
             }
             // Reclaim the previous side-car, but never the one we just linked.
             if (snapApplied) deleteOldSidecar(prevFile, linkFile);
+            long tEnd = System.nanoTime();
+
+            long totalMs = (tEnd - tStart) / 1_000_000;
+            long prepSnapMs = (tPrepSnapDone - tStart) / 1_000_000;
+            long buildBatchMs = (tBuildBatchDone - tPrepSnapDone) / 1_000_000;
+            long dbWriteMs = (tDbWriteDone - tBuildBatchDone) / 1_000_000;
+            long cleanupMs = (tEnd - tDbWriteDone) / 1_000_000;
+
+            if (dbWriteMs > 500) {
+                LOG.warn("SLOW db.write(): {}ms (batch ops={}, entries={}, snapApplied={})",
+                        dbWriteMs, batchCount,
+                        entries == null ? 0 : entries.size(), snapApplied);
+            }
+            if (totalMs > 100) {
+                LOG.debug("writeBatched: total={}ms [prepSnap={}ms buildBatch={}ms dbWrite={}ms cleanup={}ms] entries={} snap={}",
+                        totalMs, prepSnapMs, buildBatchMs, dbWriteMs, cleanupMs,
+                        entries == null ? 0 : entries.size(),
+                        snapApplied ? snap.getMetadata().getIndex() : 0);
+            }
         }
     }
 
     private void appendIntoBatch(WriteBatch wb, List<Eraftpb.Entry> entries) throws RocksDBException {
+        long tStart = System.nanoTime();
         // Truncate any uncommitted suffix that conflicts with the new
         // entries' starting index.
         long fromIdx = entries.get(0).getIndex();
         long currentLast = lastIndex();
+        long tLastIndexDone = System.nanoTime();
+
+        long tDeleteRangeDone = tLastIndexDone;
         if (fromIdx <= currentLast) {
             wb.deleteRange(cfLog, indexKey(fromIdx), indexKey(currentLast + 1));
+            tDeleteRangeDone = System.nanoTime();
         }
+
         for (Eraftpb.Entry e : entries) {
             wb.put(cfLog, indexKey(e.getIndex()), e.toByteArray());
+        }
+        long tEnd = System.nanoTime();
+
+        long lastIndexMs = (tLastIndexDone - tStart) / 1_000_000;
+        long deleteRangeMs = (tDeleteRangeDone - tLastIndexDone) / 1_000_000;
+        long putEntriesMs = (tEnd - tDeleteRangeDone) / 1_000_000;
+        long totalMs = (tEnd - tStart) / 1_000_000;
+
+        if (lastIndexMs > 50 || deleteRangeMs > 50 || putEntriesMs > 50) {
+            LOG.debug("appendIntoBatch: total={}ms [lastIndex={}ms deleteRange={}ms putEntries={}ms] entries={} fromIdx={} currentLast={}",
+                    totalMs, lastIndexMs, deleteRangeMs, putEntriesMs,
+                    entries.size(), fromIdx, currentLast);
         }
     }
 
