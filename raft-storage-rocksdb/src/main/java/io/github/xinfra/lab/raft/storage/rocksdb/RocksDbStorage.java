@@ -140,6 +140,8 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     private final Object lock = new Object();
 
     private volatile boolean closed = false;
+    private volatile String lockHolder = "none";
+    private volatile long lockHeldSince = 0;
 
     public RocksDbStorage(Path dir) throws RocksDBException, IOException {
         this(dir, RocksDbStorageOptions.DEFAULT);
@@ -209,11 +211,22 @@ public class RocksDbStorage implements Storage, AutoCloseable {
         }
     }
 
+    private void enterLock(String methodName) {
+        lockHolder = methodName;
+        lockHeldSince = System.nanoTime();
+    }
+
+    private void exitLock() {
+        lockHolder = "none";
+        lockHeldSince = 0;
+    }
+
     // ====================== Storage read API ======================
 
     @Override
     public InitialStateResult initialState() {
         synchronized (lock) {
+            enterLock("initialState");
             try {
                 byte[] hsBytes = db.get(cfState, KEY_HARD_STATE);
                 Eraftpb.HardState hs = hsBytes == null
@@ -241,6 +254,8 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             } catch (RocksDBException e) {
                 throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
                         "rocksdb initialState read failed", e);
+            } finally {
+                exitLock();
             }
         }
     }
@@ -248,59 +263,69 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     @Override
     public  List<Eraftpb.Entry> entries(long lo, long hi, long maxSize) throws RaftException {
         synchronized (lock) {
-            long first = firstIndex();
-            long last = lastIndex();
-            if (lo < first) throw RaftException.ErrCompacted;
-            if (hi > last + 1) throw new RaftInvariantException(
-                    "entries' hi(" + hi + ") is out of bound lastindex(" + last + ")");
+            enterLock("entries");
+            try {
+                long first = firstIndex();
+                long last = lastIndex();
+                if (lo < first) throw RaftException.ErrCompacted;
+                if (hi > last + 1) throw new RaftInvariantException(
+                        "entries' hi(" + hi + ") is out of bound lastindex(" + last + ")");
 
-            List<Eraftpb.Entry> result = new ArrayList<>();
-            long size = 0;
-            try (RocksIterator it = db.newIterator(cfLog)) {
-                it.seek(indexKey(lo));
-                while (it.isValid()) {
-                    long k = decodeIndex(it.key());
-                    if (k >= hi) break;
-                    Eraftpb.Entry e;
-                    try {
-                        e = Eraftpb.Entry.parseFrom(it.value());
-                    } catch (InvalidProtocolBufferException ipe) {
-                        throw new RaftInvariantException(RaftInvariantException.Category.DATA_CORRUPTION,
-                                "rocksdb log entry corrupt at " + k, ipe);
+                List<Eraftpb.Entry> result = new ArrayList<>();
+                long size = 0;
+                try (RocksIterator it = db.newIterator(cfLog)) {
+                    it.seek(indexKey(lo));
+                    while (it.isValid()) {
+                        long k = decodeIndex(it.key());
+                        if (k >= hi) break;
+                        Eraftpb.Entry e;
+                        try {
+                            e = Eraftpb.Entry.parseFrom(it.value());
+                        } catch (InvalidProtocolBufferException ipe) {
+                            throw new RaftInvariantException(RaftInvariantException.Category.DATA_CORRUPTION,
+                                    "rocksdb log entry corrupt at " + k, ipe);
+                        }
+                        size += e.getSerializedSize();
+                        if (!result.isEmpty() && size > maxSize) break;
+                        result.add(e);
+                        it.next();
                     }
-                    size += e.getSerializedSize();
-                    if (!result.isEmpty() && size > maxSize) break;
-                    result.add(e);
-                    it.next();
                 }
+                return result;
+            } finally {
+                exitLock();
             }
-            return result;
         }
     }
 
     @Override
     public  long term(long i) throws RaftException {
         synchronized (lock) {
-            // Treat the snapshot point (or virtual index 0 on fresh storage)
-            // as a dummy with stored term, matching MemoryStorage's
-            // dummy-entry-at-snap-index semantics. Callers (RaftLog.lastEntryID
-            // etc.) rely on term(0)==0 on bootstrap.
-            Eraftpb.Snapshot snap = readSnapshotInternal();
-            long snapIdx = snap == null ? 0 : snap.getMetadata().getIndex();
-            long snapTerm = snap == null ? 0 : snap.getMetadata().getTerm();
-            if (i == snapIdx) return snapTerm;
-            if (i < snapIdx) throw RaftException.ErrCompacted;
-            if (i > lastIndex()) throw RaftException.ErrUnavailable;
+            enterLock("term");
             try {
-                byte[] v = db.get(cfLog, indexKey(i));
-                if (v == null) throw RaftException.ErrUnavailable;
-                return Eraftpb.Entry.parseFrom(v).getTerm();
-            } catch (InvalidProtocolBufferException e) {
-                throw new RaftInvariantException(RaftInvariantException.Category.DATA_CORRUPTION,
-                        "rocksdb log entry corrupt at " + i, e);
-            } catch (RocksDBException e) {
-                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                        "rocksdb term read failed at " + i, e);
+                // Treat the snapshot point (or virtual index 0 on fresh storage)
+                // as a dummy with stored term, matching MemoryStorage's
+                // dummy-entry-at-snap-index semantics. Callers (RaftLog.lastEntryID
+                // etc.) rely on term(0)==0 on bootstrap.
+                Eraftpb.Snapshot snap = readSnapshotInternal();
+                long snapIdx = snap == null ? 0 : snap.getMetadata().getIndex();
+                long snapTerm = snap == null ? 0 : snap.getMetadata().getTerm();
+                if (i == snapIdx) return snapTerm;
+                if (i < snapIdx) throw RaftException.ErrCompacted;
+                if (i > lastIndex()) throw RaftException.ErrUnavailable;
+                try {
+                    byte[] v = db.get(cfLog, indexKey(i));
+                    if (v == null) throw RaftException.ErrUnavailable;
+                    return Eraftpb.Entry.parseFrom(v).getTerm();
+                } catch (InvalidProtocolBufferException e) {
+                    throw new RaftInvariantException(RaftInvariantException.Category.DATA_CORRUPTION,
+                            "rocksdb log entry corrupt at " + i, e);
+                } catch (RocksDBException e) {
+                    throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                            "rocksdb term read failed at " + i, e);
+                }
+            } finally {
+                exitLock();
             }
         }
     }
@@ -308,44 +333,59 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     @Override
     public  long lastIndex() {
         synchronized (lock) {
-            try (RocksIterator it = db.newIterator(cfLog)) {
-                it.seekToLast();
-                if (it.isValid()) return decodeIndex(it.key());
+            enterLock("lastIndex");
+            try {
+                try (RocksIterator it = db.newIterator(cfLog)) {
+                    it.seekToLast();
+                    if (it.isValid()) return decodeIndex(it.key());
+                }
+                // No log entries: lastIndex = snapshot.index (or 0 if no snapshot).
+                Eraftpb.Snapshot snap = readSnapshotInternal();
+                return snap == null ? 0 : snap.getMetadata().getIndex();
+            } finally {
+                exitLock();
             }
-            // No log entries: lastIndex = snapshot.index (or 0 if no snapshot).
-            Eraftpb.Snapshot snap = readSnapshotInternal();
-            return snap == null ? 0 : snap.getMetadata().getIndex();
         }
     }
 
     @Override
     public  long firstIndex() {
         synchronized (lock) {
-            // With snapshot: firstIndex = snap.index + 1.
-            // Without snapshot: firstIndex = lowest stored log key, or 1 if log is empty.
-            // Note: unlike MemoryStorage we do NOT keep a dummy entry at the
-            // compaction point — log entries here are keyed by their actual
-            // raft index. compact() / applySnapshot() leave the log starting
-            // at compactIndex+1, which is correctly the firstIndex.
-            Eraftpb.Snapshot snap = readSnapshotInternal();
-            if (snap != null && snap.getMetadata().getIndex() > 0) {
-                return snap.getMetadata().getIndex() + 1;
-            }
-            try (RocksIterator it = db.newIterator(cfLog)) {
-                it.seekToFirst();
-                if (it.isValid()) {
-                    return decodeIndex(it.key());
+            enterLock("firstIndex");
+            try {
+                // With snapshot: firstIndex = snap.index + 1.
+                // Without snapshot: firstIndex = lowest stored log key, or 1 if log is empty.
+                // Note: unlike MemoryStorage we do NOT keep a dummy entry at the
+                // compaction point — log entries here are keyed by their actual
+                // raft index. compact() / applySnapshot() leave the log starting
+                // at compactIndex+1, which is correctly the firstIndex.
+                Eraftpb.Snapshot snap = readSnapshotInternal();
+                if (snap != null && snap.getMetadata().getIndex() > 0) {
+                    return snap.getMetadata().getIndex() + 1;
                 }
+                try (RocksIterator it = db.newIterator(cfLog)) {
+                    it.seekToFirst();
+                    if (it.isValid()) {
+                        return decodeIndex(it.key());
+                    }
+                }
+                return 1;
+            } finally {
+                exitLock();
             }
-            return 1;
         }
     }
 
     @Override
     public  Eraftpb.Snapshot snapshot() throws RaftException {
         synchronized (lock) {
-            Eraftpb.Snapshot snap = readSnapshotInternal();
-            return snap == null ? Eraftpb.Snapshot.getDefaultInstance() : snap;
+            enterLock("snapshot");
+            try {
+                Eraftpb.Snapshot snap = readSnapshotInternal();
+                return snap == null ? Eraftpb.Snapshot.getDefaultInstance() : snap;
+            } finally {
+                exitLock();
+            }
         }
     }
 
@@ -354,110 +394,159 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     @Override
     public  void setHardState(Eraftpb.HardState hs) {
         synchronized (lock) {
-            try (WriteBatch wb = new WriteBatch()) {
-                wb.put(cfState, KEY_HARD_STATE, hs.toByteArray());
-                db.write(writeOpts, wb);
-            } catch (RocksDBException e) {
-                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                        "rocksdb setHardState failed", e);
+            enterLock("setHardState");
+            try {
+                try (WriteBatch wb = new WriteBatch()) {
+                    wb.put(cfState, KEY_HARD_STATE, hs.toByteArray());
+                    db.write(writeOpts, wb);
+                } catch (RocksDBException e) {
+                    throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                            "rocksdb setHardState failed", e);
+                }
+            } finally {
+                exitLock();
             }
         }
     }
 
     @Override
     public  void append(List<Eraftpb.Entry> entries) {
+        long tBefore = System.nanoTime();
+        String prevHolder = lockHolder;
         synchronized (lock) {
-            if (entries == null || entries.isEmpty()) return;
-            try (WriteBatch wb = new WriteBatch()) {
-                appendIntoBatch(wb, entries);
-                db.write(writeOpts, wb);
-            } catch (RocksDBException e) {
-                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                        "rocksdb append failed", e);
+            long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
+            if (waitMs > 50) {
+                LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "append", waitMs, prevHolder);
+            }
+            enterLock("append");
+            try {
+                if (entries == null || entries.isEmpty()) return;
+                try (WriteBatch wb = new WriteBatch()) {
+                    appendIntoBatch(wb, entries);
+                    db.write(writeOpts, wb);
+                } catch (RocksDBException e) {
+                    throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                            "rocksdb append failed", e);
+                }
+            } finally {
+                exitLock();
             }
         }
     }
 
     @Override
     public  void applySnapshot(Eraftpb.Snapshot snap) throws RaftException {
+        long tBefore = System.nanoTime();
+        String prevHolder = lockHolder;
         synchronized (lock) {
-            if (alreadyInstalledOutOfBand(snap)) {
-                // Metadata-only re-apply of a snapshot already streamed into the
-                // side-car; persisting it inline would orphan the side-car. No-op.
-                return;
+            long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
+            if (waitMs > 50) {
+                LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "applySnapshot", waitMs, prevHolder);
             }
-            Eraftpb.Snapshot existing = readSnapshotInternal();
-            if (existing != null && existing.getMetadata().getIndex() >= snap.getMetadata().getIndex()) {
-                throw RaftException.ErrSnapOutOfDate;
+            enterLock("applySnapshot");
+            try {
+                if (alreadyInstalledOutOfBand(snap)) {
+                    // Metadata-only re-apply of a snapshot already streamed into the
+                    // side-car; persisting it inline would orphan the side-car. No-op.
+                    return;
+                }
+                Eraftpb.Snapshot existing = readSnapshotInternal();
+                if (existing != null && existing.getMetadata().getIndex() >= snap.getMetadata().getIndex()) {
+                    throw RaftException.ErrSnapOutOfDate;
+                }
+                String prevFile = readSnapshotFileName();
+                try (WriteBatch wb = new WriteBatch()) {
+                    wb.put(cfSnap, KEY_SNAPSHOT, snap.toByteArray());
+                    // Inline payload: this snapshot is no longer side-car backed.
+                    wb.delete(cfState, KEY_SNAPSHOT_FILE);
+                    // Discard log entries up through snap.index inclusive.
+                    long snapIdx = snap.getMetadata().getIndex();
+                    wb.deleteRange(cfLog, indexKey(0), indexKey(snapIdx + 1));
+                    db.write(writeOpts, wb);
+                } catch (RocksDBException e) {
+                    throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                            "rocksdb applySnapshot failed", e);
+                }
+                deleteOldSidecar(prevFile, null);
+            } finally {
+                exitLock();
             }
-            String prevFile = readSnapshotFileName();
-            try (WriteBatch wb = new WriteBatch()) {
-                wb.put(cfSnap, KEY_SNAPSHOT, snap.toByteArray());
-                // Inline payload: this snapshot is no longer side-car backed.
-                wb.delete(cfState, KEY_SNAPSHOT_FILE);
-                // Discard log entries up through snap.index inclusive.
-                long snapIdx = snap.getMetadata().getIndex();
-                wb.deleteRange(cfLog, indexKey(0), indexKey(snapIdx + 1));
-                db.write(writeOpts, wb);
-            } catch (RocksDBException e) {
-                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                        "rocksdb applySnapshot failed", e);
-            }
-            deleteOldSidecar(prevFile, null);
         }
     }
 
     @Override
     public  Eraftpb.Snapshot createSnapshot(long i, Eraftpb.ConfState cs, byte[] data) throws RaftException {
+        long tBefore = System.nanoTime();
+        String prevHolder = lockHolder;
         synchronized (lock) {
-            Eraftpb.Snapshot existing = readSnapshotInternal();
-            if (existing != null && i <= existing.getMetadata().getIndex()) {
-                throw RaftException.ErrSnapOutOfDate;
+            long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
+            if (waitMs > 50) {
+                LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "createSnapshot", waitMs, prevHolder);
             }
-            if (i > lastIndex()) {
-                throw new RaftInvariantException("createSnapshot " + i + " > lastIndex " + lastIndex());
-            }
-            long term;
+            enterLock("createSnapshot");
             try {
-                term = term(i);
-            } catch (RaftException e) {
-                throw new RaftInvariantException("createSnapshot: term(" + i + ") failed: " + e.code(), e);
+                Eraftpb.Snapshot existing = readSnapshotInternal();
+                if (existing != null && i <= existing.getMetadata().getIndex()) {
+                    throw RaftException.ErrSnapOutOfDate;
+                }
+                if (i > lastIndex()) {
+                    throw new RaftInvariantException("createSnapshot " + i + " > lastIndex " + lastIndex());
+                }
+                long term;
+                try {
+                    term = term(i);
+                } catch (RaftException e) {
+                    throw new RaftInvariantException("createSnapshot: term(" + i + ") failed: " + e.code(), e);
+                }
+                Eraftpb.SnapshotMetadata.Builder mb = Eraftpb.SnapshotMetadata.newBuilder()
+                        .setIndex(i).setTerm(term);
+                if (cs != null) mb.setConfState(cs);
+                Eraftpb.Snapshot snap = Eraftpb.Snapshot.newBuilder()
+                        .setMetadata(mb)
+                        .setData(data == null ? com.google.protobuf.ByteString.EMPTY : com.google.protobuf.ByteString.copyFrom(data))
+                        .build();
+                String prevFile = readSnapshotFileName();
+                try (WriteBatch wb = new WriteBatch()) {
+                    wb.put(cfSnap, KEY_SNAPSHOT, snap.toByteArray());
+                    wb.delete(cfState, KEY_SNAPSHOT_FILE);
+                    db.write(writeOpts, wb);
+                } catch (RocksDBException e) {
+                    throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                            "rocksdb createSnapshot failed", e);
+                }
+                deleteOldSidecar(prevFile, null);
+                return snap;
+            } finally {
+                exitLock();
             }
-            Eraftpb.SnapshotMetadata.Builder mb = Eraftpb.SnapshotMetadata.newBuilder()
-                    .setIndex(i).setTerm(term);
-            if (cs != null) mb.setConfState(cs);
-            Eraftpb.Snapshot snap = Eraftpb.Snapshot.newBuilder()
-                    .setMetadata(mb)
-                    .setData(data == null ? com.google.protobuf.ByteString.EMPTY : com.google.protobuf.ByteString.copyFrom(data))
-                    .build();
-            String prevFile = readSnapshotFileName();
-            try (WriteBatch wb = new WriteBatch()) {
-                wb.put(cfSnap, KEY_SNAPSHOT, snap.toByteArray());
-                wb.delete(cfState, KEY_SNAPSHOT_FILE);
-                db.write(writeOpts, wb);
-            } catch (RocksDBException e) {
-                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                        "rocksdb createSnapshot failed", e);
-            }
-            deleteOldSidecar(prevFile, null);
-            return snap;
         }
     }
 
     @Override
     public  void compact(long compactIndex) throws RaftException {
+        long tBefore = System.nanoTime();
+        String prevHolder = lockHolder;
         synchronized (lock) {
-            long first = firstIndex();
-            if (compactIndex < first) throw RaftException.ErrCompacted;
-            long last = lastIndex();
-            if (compactIndex > last) {
-                throw new RaftInvariantException("compact " + compactIndex + " > lastIndex " + last);
+            long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
+            if (waitMs > 50) {
+                LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "compact", waitMs, prevHolder);
             }
+            enterLock("compact");
             try {
-                db.deleteRange(cfLog, indexKey(0), indexKey(compactIndex + 1));
-            } catch (RocksDBException e) {
-                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                        "rocksdb compact failed", e);
+                long first = firstIndex();
+                if (compactIndex < first) throw RaftException.ErrCompacted;
+                long last = lastIndex();
+                if (compactIndex > last) {
+                    throw new RaftInvariantException("compact " + compactIndex + " > lastIndex " + last);
+                }
+                try {
+                    db.deleteRange(cfLog, indexKey(0), indexKey(compactIndex + 1));
+                } catch (RocksDBException e) {
+                    throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                            "rocksdb compact failed", e);
+                }
+            } finally {
+                exitLock();
             }
         }
     }
@@ -472,91 +561,113 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     @Override
     public  Eraftpb.Snapshot createSnapshotStreaming(long i, Eraftpb.ConfState cs, SnapshotDataWriter writer)
             throws RaftException, IOException {
+        long tBefore = System.nanoTime();
+        String prevHolder = lockHolder;
         synchronized (lock) {
-            Eraftpb.Snapshot existing = readSnapshotInternal();
-            if (existing != null && i <= existing.getMetadata().getIndex()) {
-                throw RaftException.ErrSnapOutOfDate;
+            long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
+            if (waitMs > 50) {
+                LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "createSnapshotStreaming", waitMs, prevHolder);
             }
-            if (i > lastIndex()) {
-                throw new RaftInvariantException("createSnapshot " + i + " > lastIndex " + lastIndex());
-            }
-            long term;
+            enterLock("createSnapshotStreaming");
             try {
-                term = term(i);
-            } catch (RaftException e) {
-                throw new RaftInvariantException("createSnapshot: term(" + i + ") failed: " + e.code(), e);
-            }
+                Eraftpb.Snapshot existing = readSnapshotInternal();
+                if (existing != null && i <= existing.getMetadata().getIndex()) {
+                    throw RaftException.ErrSnapOutOfDate;
+                }
+                if (i > lastIndex()) {
+                    throw new RaftInvariantException("createSnapshot " + i + " > lastIndex " + lastIndex());
+                }
+                long term;
+                try {
+                    term = term(i);
+                } catch (RaftException e) {
+                    throw new RaftInvariantException("createSnapshot: term(" + i + ") failed: " + e.code(), e);
+                }
 
-            String fileName = sidecarName(i, term);
-            // Stream the application payload straight to a side-car file; never
-            // hold it all in heap. temp -> fsync -> atomic rename -> dir fsync.
-            Path finalPath = snapDir.resolve(fileName);
-            Path tmpPath = snapDir.resolve(fileName + ".tmp");
-            try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
-                    tmpPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))) {
-                writer.writeTo(out);
-                out.flush();
-            }
-            fsyncFile(tmpPath);
-            Files.move(tmpPath, finalPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            fsyncDir(snapDir);
+                String fileName = sidecarName(i, term);
+                // Stream the application payload straight to a side-car file; never
+                // hold it all in heap. temp -> fsync -> atomic rename -> dir fsync.
+                Path finalPath = snapDir.resolve(fileName);
+                Path tmpPath = snapDir.resolve(fileName + ".tmp");
+                try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
+                        tmpPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))) {
+                    writer.writeTo(out);
+                    out.flush();
+                }
+                fsyncFile(tmpPath);
+                Files.move(tmpPath, finalPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                fsyncDir(snapDir);
 
-            Eraftpb.SnapshotMetadata.Builder mb = Eraftpb.SnapshotMetadata.newBuilder()
-                    .setIndex(i).setTerm(term);
-            if (cs != null) mb.setConfState(cs);
-            // Metadata only — payload lives in the side-car file, not inline.
-            Eraftpb.Snapshot meta = Eraftpb.Snapshot.newBuilder().setMetadata(mb).build();
+                Eraftpb.SnapshotMetadata.Builder mb = Eraftpb.SnapshotMetadata.newBuilder()
+                        .setIndex(i).setTerm(term);
+                if (cs != null) mb.setConfState(cs);
+                // Metadata only — payload lives in the side-car file, not inline.
+                Eraftpb.Snapshot meta = Eraftpb.Snapshot.newBuilder().setMetadata(mb).build();
 
-            String prevFile = readSnapshotFileName();
-            try (WriteBatch wb = new WriteBatch()) {
-                wb.put(cfSnap, KEY_SNAPSHOT, meta.toByteArray());
-                wb.put(cfState, KEY_SNAPSHOT_FILE, bytes(fileName));
-                db.write(writeOpts, wb);
-            } catch (RocksDBException e) {
-                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                        "rocksdb streaming createSnapshot failed", e);
+                String prevFile = readSnapshotFileName();
+                try (WriteBatch wb = new WriteBatch()) {
+                    wb.put(cfSnap, KEY_SNAPSHOT, meta.toByteArray());
+                    wb.put(cfState, KEY_SNAPSHOT_FILE, bytes(fileName));
+                    db.write(writeOpts, wb);
+                } catch (RocksDBException e) {
+                    throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                            "rocksdb streaming createSnapshot failed", e);
+                }
+                deleteOldSidecar(prevFile, fileName);
+                return meta;
+            } finally {
+                exitLock();
             }
-            deleteOldSidecar(prevFile, fileName);
-            return meta;
         }
     }
 
     @Override
     public  void applySnapshot(Eraftpb.Snapshot meta, InputStream data)
             throws RaftException, IOException {
+        long tBefore = System.nanoTime();
+        String prevHolder = lockHolder;
         synchronized (lock) {
-            long idx = meta.getMetadata().getIndex();
-            long term = meta.getMetadata().getTerm();
-            Eraftpb.Snapshot existing = readSnapshotInternal();
-            if (existing != null && existing.getMetadata().getIndex() >= idx) {
-                throw RaftException.ErrSnapOutOfDate;
+            long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
+            if (waitMs > 50) {
+                LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "applySnapshot(stream)", waitMs, prevHolder);
             }
+            enterLock("applySnapshot(stream)");
+            try {
+                long idx = meta.getMetadata().getIndex();
+                long term = meta.getMetadata().getTerm();
+                Eraftpb.Snapshot existing = readSnapshotInternal();
+                if (existing != null && existing.getMetadata().getIndex() >= idx) {
+                    throw RaftException.ErrSnapOutOfDate;
+                }
 
-            String fileName = sidecarName(idx, term);
-            Path finalPath = snapDir.resolve(fileName);
-            Path tmpPath = snapDir.resolve(fileName + ".tmp");
-            try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
-                    tmpPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))) {
-                data.transferTo(out);
-                out.flush();
-            }
-            fsyncFile(tmpPath);
-            Files.move(tmpPath, finalPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            fsyncDir(snapDir);
+                String fileName = sidecarName(idx, term);
+                Path finalPath = snapDir.resolve(fileName);
+                Path tmpPath = snapDir.resolve(fileName + ".tmp");
+                try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
+                        tmpPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))) {
+                    data.transferTo(out);
+                    out.flush();
+                }
+                fsyncFile(tmpPath);
+                Files.move(tmpPath, finalPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                fsyncDir(snapDir);
 
-            // Persist metadata only (strip any inline data the caller may have set).
-            Eraftpb.Snapshot metaOnly = meta.toBuilder().clearData().build();
-            String prevFile = readSnapshotFileName();
-            try (WriteBatch wb = new WriteBatch()) {
-                wb.put(cfSnap, KEY_SNAPSHOT, metaOnly.toByteArray());
-                wb.put(cfState, KEY_SNAPSHOT_FILE, bytes(fileName));
-                wb.deleteRange(cfLog, indexKey(0), indexKey(idx + 1));
-                db.write(writeOpts, wb);
-            } catch (RocksDBException e) {
-                throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
-                        "rocksdb streaming applySnapshot failed", e);
+                // Persist metadata only (strip any inline data the caller may have set).
+                Eraftpb.Snapshot metaOnly = meta.toBuilder().clearData().build();
+                String prevFile = readSnapshotFileName();
+                try (WriteBatch wb = new WriteBatch()) {
+                    wb.put(cfSnap, KEY_SNAPSHOT, metaOnly.toByteArray());
+                    wb.put(cfState, KEY_SNAPSHOT_FILE, bytes(fileName));
+                    wb.deleteRange(cfLog, indexKey(0), indexKey(idx + 1));
+                    db.write(writeOpts, wb);
+                } catch (RocksDBException e) {
+                    throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
+                            "rocksdb streaming applySnapshot failed", e);
+                }
+                deleteOldSidecar(prevFile, fileName);
+            } finally {
+                exitLock();
             }
-            deleteOldSidecar(prevFile, fileName);
         }
     }
 
@@ -580,48 +691,64 @@ public class RocksDbStorage implements Storage, AutoCloseable {
      */
     public  void stageSnapshotData(Eraftpb.Snapshot meta, InputStream data)
             throws RaftException, IOException {
+        long tBefore = System.nanoTime();
+        String prevHolder = lockHolder;
         synchronized (lock) {
-            long idx = meta.getMetadata().getIndex();
-            long term = meta.getMetadata().getTerm();
-            Eraftpb.Snapshot existing = readSnapshotInternal();
-            if (existing != null && existing.getMetadata().getIndex() >= idx) {
-                data.transferTo(OutputStream.nullOutputStream());
-                return;
+            long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
+            if (waitMs > 50) {
+                LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "stageSnapshotData", waitMs, prevHolder);
             }
-            String fileName = sidecarName(idx, term);
-            Path finalPath = snapDir.resolve(fileName);
-            Path tmpPath = snapDir.resolve(fileName + ".tmp");
-            try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
-                    tmpPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))) {
-                data.transferTo(out);
-                out.flush();
+            enterLock("stageSnapshotData");
+            try {
+                long idx = meta.getMetadata().getIndex();
+                long term = meta.getMetadata().getTerm();
+                Eraftpb.Snapshot existing = readSnapshotInternal();
+                if (existing != null && existing.getMetadata().getIndex() >= idx) {
+                    data.transferTo(OutputStream.nullOutputStream());
+                    return;
+                }
+                String fileName = sidecarName(idx, term);
+                Path finalPath = snapDir.resolve(fileName);
+                Path tmpPath = snapDir.resolve(fileName + ".tmp");
+                try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
+                        tmpPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))) {
+                    data.transferTo(out);
+                    out.flush();
+                }
+                fsyncFile(tmpPath);
+                Files.move(tmpPath, finalPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                fsyncDir(snapDir);
+                // Intentionally NOT linked yet: writeBatched(rd.snapshot()) finalizes after
+                // the core restores.
+            } finally {
+                exitLock();
             }
-            fsyncFile(tmpPath);
-            Files.move(tmpPath, finalPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            fsyncDir(snapDir);
-            // Intentionally NOT linked yet: writeBatched(rd.snapshot()) finalizes after
-            // the core restores.
         }
     }
 
     @Override
     public  InputStream openSnapshotData(Eraftpb.Snapshot snap) throws RaftException, IOException {
         synchronized (lock) {
-            // Use the side-car file only when it backs the *current* snapshot;
-            // otherwise fall back to whatever inline payload the caller passed.
-            String fileName = readSnapshotFileName();
-            if (fileName != null) {
-                Eraftpb.Snapshot cur = readSnapshotInternal();
-                long curIdx = cur == null ? 0 : cur.getMetadata().getIndex();
-                long wantIdx = snap == null ? curIdx : snap.getMetadata().getIndex();
-                Path p = snapDir.resolve(fileName);
-                if (wantIdx == curIdx && Files.exists(p)) {
-                    return new BufferedInputStream(Files.newInputStream(p, StandardOpenOption.READ));
+            enterLock("openSnapshotData");
+            try {
+                // Use the side-car file only when it backs the *current* snapshot;
+                // otherwise fall back to whatever inline payload the caller passed.
+                String fileName = readSnapshotFileName();
+                if (fileName != null) {
+                    Eraftpb.Snapshot cur = readSnapshotInternal();
+                    long curIdx = cur == null ? 0 : cur.getMetadata().getIndex();
+                    long wantIdx = snap == null ? curIdx : snap.getMetadata().getIndex();
+                    Path p = snapDir.resolve(fileName);
+                    if (wantIdx == curIdx && Files.exists(p)) {
+                        return new BufferedInputStream(Files.newInputStream(p, StandardOpenOption.READ));
+                    }
                 }
+                com.google.protobuf.ByteString inline =
+                        snap != null ? snap.getData() : com.google.protobuf.ByteString.EMPTY;
+                return inline.newInput();
+            } finally {
+                exitLock();
             }
-            com.google.protobuf.ByteString inline =
-                    snap != null ? snap.getData() : com.google.protobuf.ByteString.EMPTY;
-            return inline.newInput();
         }
     }
 
@@ -696,34 +823,39 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     @Override
     public  void close() {
         synchronized (lock) {
-            if (closed) return;
-            closed = true;
-            for (ColumnFamilyHandle h : cfHandles) {
-                try {
-                    h.close();
-                } catch (Throwable t) {
-                    LOG.warn("close column-family handle failed: {}", t.toString());
+            enterLock("close");
+            try {
+                if (closed) return;
+                closed = true;
+                for (ColumnFamilyHandle h : cfHandles) {
+                    try {
+                        h.close();
+                    } catch (Throwable t) {
+                        LOG.warn("close column-family handle failed: {}", t.toString());
+                    }
                 }
-            }
-            try {
-                writeOpts.close();
-            } catch (Throwable t) {
-                LOG.warn("close writeOpts failed: {}", t.toString());
-            }
-            try {
-                db.close();
-            } catch (Throwable t) {
-                LOG.warn("close db failed: {}", t.toString());
-            }
-            try {
-                if (bloomFilter != null) bloomFilter.close();
-            } catch (Throwable t) {
-                LOG.warn("close bloomFilter failed: {}", t.toString());
-            }
-            try {
-                blockCache.close();
-            } catch (Throwable t) {
-                LOG.warn("close blockCache failed: {}", t.toString());
+                try {
+                    writeOpts.close();
+                } catch (Throwable t) {
+                    LOG.warn("close writeOpts failed: {}", t.toString());
+                }
+                try {
+                    db.close();
+                } catch (Throwable t) {
+                    LOG.warn("close db failed: {}", t.toString());
+                }
+                try {
+                    if (bloomFilter != null) bloomFilter.close();
+                } catch (Throwable t) {
+                    LOG.warn("close bloomFilter failed: {}", t.toString());
+                }
+                try {
+                    blockCache.close();
+                } catch (Throwable t) {
+                    LOG.warn("close blockCache failed: {}", t.toString());
+                }
+            } finally {
+                exitLock();
             }
         }
     }
@@ -737,6 +869,7 @@ public class RocksDbStorage implements Storage, AutoCloseable {
      */
     public  long getApplied() {
         synchronized (lock) {
+            enterLock("getApplied");
             try {
                 byte[] v = db.get(cfState, KEY_APPLIED);
                 if (v == null || v.length != 8) return 0;
@@ -744,6 +877,8 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             } catch (RocksDBException e) {
                 throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
                         "rocksdb getApplied failed", e);
+            } finally {
+                exitLock();
             }
         }
     }
@@ -756,13 +891,22 @@ public class RocksDbStorage implements Storage, AutoCloseable {
      * restart.
      */
     public  void setApplied(long applied) {
+        long tBefore = System.nanoTime();
+        String prevHolder = lockHolder;
         synchronized (lock) {
+            long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
+            if (waitMs > 50) {
+                LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "setApplied", waitMs, prevHolder);
+            }
+            enterLock("setApplied");
             try {
                 byte[] v = ByteBuffer.allocate(8).putLong(applied).array();
                 db.put(cfState, writeOpts, KEY_APPLIED, v);
             } catch (RocksDBException e) {
                 throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
                         "rocksdb setApplied failed", e);
+            } finally {
+                exitLock();
             }
         }
     }
@@ -776,11 +920,14 @@ public class RocksDbStorage implements Storage, AutoCloseable {
      */
     public  void setConfState(Eraftpb.ConfState cs) {
         synchronized (lock) {
+            enterLock("setConfState");
             try {
                 db.put(cfState, writeOpts, KEY_CONF_STATE, cs.toByteArray());
             } catch (RocksDBException e) {
                 throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
                         "rocksdb setConfState failed", e);
+            } finally {
+                exitLock();
             }
         }
     }
@@ -799,12 +946,15 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                              Eraftpb.HardState hs,
                              Eraftpb.Snapshot snap) {
         long tBeforeLock = System.nanoTime();
+        String prevHolder = lockHolder;
         synchronized (lock) {
             long tAfterLock = System.nanoTime();
             long lockWaitMs = (tAfterLock - tBeforeLock) / 1_000_000;
             if (lockWaitMs > 50) {
-                LOG.warn("writeBatched lock contention: waited {}ms to acquire lock", lockWaitMs);
+                LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "writeBatched", lockWaitMs, prevHolder);
             }
+            enterLock("writeBatched");
+            try {
             long tStart = System.nanoTime();
             boolean snapApplied = snap != null && !isEmptySnap(snap);
             // Side-car file name to LINK when finalizing an out-of-band snapshot
@@ -887,6 +1037,9 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                         totalMs, lockWaitMs, prepSnapMs, buildBatchMs, dbWriteMs, cleanupMs,
                         entries == null ? 0 : entries.size(),
                         snapApplied ? snap.getMetadata().getIndex() : 0);
+            }
+            } finally {
+                exitLock();
             }
         }
     }
