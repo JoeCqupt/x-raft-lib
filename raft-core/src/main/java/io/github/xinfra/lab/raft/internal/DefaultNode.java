@@ -224,12 +224,19 @@ public class DefaultNode implements Node {
                     // leader. Cheap (4 MDC puts), confined to this thread.
                     RaftMdc.set(r.id, r.term, r.state, r.lead);
 
-                    // Block until next event (true event-driven; no idle polling).
+                    // Block until at least one event arrives.
                     Event ev = events.take();
-                    if (ev instanceof WakeEvent) {
-                        // Wake-up hint only; advance is handled by the flag above.
-                    } else {
+                    if (!(ev instanceof WakeEvent)) {
                         dispatch(r, ev);
+                    }
+                    // Drain all remaining pending events without blocking.
+                    // Batching N events into one Ready cycle reduces storage
+                    // fsyncs from N to 1 — critical on slow-I/O CI runners
+                    // where per-fsync latency dominates the Ready pipeline.
+                    while ((ev = events.poll()) != null) {
+                        if (!(ev instanceof WakeEvent)) {
+                            dispatch(r, ev);
+                        }
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
