@@ -176,6 +176,7 @@ public class DefaultNode implements Node {
         Raft r = rn.raft;
         long lead = Util.NONE;
         boolean waitingAdvance = false;
+        long waitingAdvanceSince = 0;
 
         // Seed structured logging context for this dedicated thread; refreshed
         // each iteration (see below) and removed in the finally.
@@ -186,6 +187,10 @@ public class DefaultNode implements Node {
                     // Process out-of-band advance flag before checking Ready.
                     if (advancePending.compareAndSet(true, false)) {
                         if (waitingAdvance) {
+                            long advanceLatencyMs = (System.nanoTime() - waitingAdvanceSince) / 1_000_000;
+                            r.logger.debug("{:x} advance after {}ms, queueSize={}, unstable={}",
+                                    r.id, advanceLatencyMs, events.size(),
+                                    r.raftLog.unstable.getEntries().size());
                             rn.advance(null);
                             waitingAdvance = false;
                         }
@@ -195,11 +200,19 @@ public class DefaultNode implements Node {
                     // readyc is unbounded so put never blocks the loop.
                     if (!waitingAdvance && rn.hasReady()) {
                         Ready rd = rn.readyWithoutAccept();
+                        r.logger.debug("{:x} emitting Ready: entries={} committed={} messages={} snapshot={} unstable={}",
+                                r.id,
+                                rd.entries().size(),
+                                rd.committedEntries().size(),
+                                rd.messages().size(),
+                                rd.snapshot().getMetadata().getIndex() > 0 ? rd.snapshot().getMetadata().getIndex() : 0,
+                                r.raftLog.unstable.getEntries().size());
                         readyc.put(rd);
                         rn.acceptReady(rd);
                         r.metrics.onReadyEmitted();
                         if (!rn.asyncStorageWrites) {
                             waitingAdvance = true;
+                            waitingAdvanceSince = System.nanoTime();
                         }
                     }
 
@@ -252,6 +265,10 @@ public class DefaultNode implements Node {
                                 dispatch(r, ev);
                             }
                             drained++;
+                        }
+                        if (drained > 0) {
+                            r.logger.debug("{:x} drained {} events, queueRemaining={}",
+                                    r.id, drained, events.size());
                         }
                     }
                 } catch (InterruptedException e) {
