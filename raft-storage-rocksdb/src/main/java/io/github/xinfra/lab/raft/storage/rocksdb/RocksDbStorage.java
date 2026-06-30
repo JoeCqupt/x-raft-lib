@@ -798,7 +798,13 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     public void writeBatched(List<Eraftpb.Entry> entries,
                              Eraftpb.HardState hs,
                              Eraftpb.Snapshot snap) {
+        long tBeforeLock = System.nanoTime();
         synchronized (lock) {
+            long tAfterLock = System.nanoTime();
+            long lockWaitMs = (tAfterLock - tBeforeLock) / 1_000_000;
+            if (lockWaitMs > 50) {
+                LOG.warn("writeBatched lock contention: waited {}ms to acquire lock", lockWaitMs);
+            }
             long tStart = System.nanoTime();
             boolean snapApplied = snap != null && !isEmptySnap(snap);
             // Side-car file name to LINK when finalizing an out-of-band snapshot
@@ -876,9 +882,9 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                         dbWriteMs, batchCount,
                         entries == null ? 0 : entries.size(), snapApplied);
             }
-            if (totalMs > 100) {
-                LOG.debug("writeBatched: total={}ms [prepSnap={}ms buildBatch={}ms dbWrite={}ms cleanup={}ms] entries={} snap={}",
-                        totalMs, prepSnapMs, buildBatchMs, dbWriteMs, cleanupMs,
+            if (totalMs > 100 || lockWaitMs > 50) {
+                LOG.debug("writeBatched: total={}ms lockWait={}ms [prepSnap={}ms buildBatch={}ms dbWrite={}ms cleanup={}ms] entries={} snap={}",
+                        totalMs, lockWaitMs, prepSnapMs, buildBatchMs, dbWriteMs, cleanupMs,
                         entries == null ? 0 : entries.size(),
                         snapApplied ? snap.getMetadata().getIndex() : 0);
             }
