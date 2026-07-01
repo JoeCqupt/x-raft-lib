@@ -154,8 +154,8 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     private volatile long cachedFirstIndex;
 
     private volatile boolean closed = false;
-    private volatile String lockHolder = "none";
-    private volatile long lockHeldSince = 0;
+    private static final ThreadLocal<String> lockHolder = ThreadLocal.withInitial(() -> "none");
+    private static final ThreadLocal<Long> lockHeldSince = ThreadLocal.withInitial(() -> 0L);
 
     public RocksDbStorage(Path dir) throws RocksDBException, IOException {
         this(dir, RocksDbStorageOptions.DEFAULT);
@@ -230,16 +230,16 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     }
 
     private void enterLock(String methodName) {
-        lockHolder = methodName;
-        lockHeldSince = System.nanoTime();
+        lockHolder.set(methodName);
+        lockHeldSince.set(System.nanoTime());
     }
 
     private void exitLock() {
-        long heldNs = lockHeldSince == 0 ? 0 : System.nanoTime() - lockHeldSince;
-        long heldMs = heldNs / 1_000_000;
-        String holder = lockHolder;
-        lockHolder = "none";
-        lockHeldSince = 0;
+        long startNs = lockHeldSince.get();
+        long heldMs = startNs == 0 ? 0 : (System.nanoTime() - startNs) / 1_000_000;
+        String holder = lockHolder.get();
+        lockHolder.set("none");
+        lockHeldSince.set(0L);
         if (heldMs > 100) {
             LOG.warn("lock held too long by {}: {}ms", holder, heldMs);
         }
@@ -434,11 +434,10 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     @Override
     public  void append(List<Eraftpb.Entry> entries) {
         long tBefore = System.nanoTime();
-        String prevHolder = lockHolder;
         writeLock.lock();
         long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
         if (waitMs > 50) {
-            LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "append", waitMs, prevHolder);
+            LOG.warn("lock contention entering append: waited {}ms", waitMs);
         }
         enterLock("append");
         try {
@@ -460,11 +459,10 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     @Override
     public  void applySnapshot(Eraftpb.Snapshot snap) throws RaftException {
         long tBefore = System.nanoTime();
-        String prevHolder = lockHolder;
         writeLock.lock();
         long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
         if (waitMs > 50) {
-            LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "applySnapshot", waitMs, prevHolder);
+            LOG.warn("lock contention entering applySnapshot: waited {}ms", waitMs);
         }
         enterLock("applySnapshot");
         try {
@@ -498,11 +496,10 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     @Override
     public  Eraftpb.Snapshot createSnapshot(long i, Eraftpb.ConfState cs, byte[] data) throws RaftException {
         long tBefore = System.nanoTime();
-        String prevHolder = lockHolder;
         writeLock.lock();
         long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
         if (waitMs > 50) {
-            LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "createSnapshot", waitMs, prevHolder);
+            LOG.warn("lock contention entering createSnapshot: waited {}ms", waitMs);
         }
         enterLock("createSnapshot");
         try {
@@ -547,11 +544,10 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     @Override
     public  void compact(long compactIndex) throws RaftException {
         long tBefore = System.nanoTime();
-        String prevHolder = lockHolder;
         writeLock.lock();
         long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
         if (waitMs > 50) {
-            LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "compact", waitMs, prevHolder);
+            LOG.warn("lock contention entering compact: waited {}ms", waitMs);
         }
         enterLock("compact");
         try {
@@ -589,11 +585,10 @@ public class RocksDbStorage implements Storage, AutoCloseable {
         // Phase 1: validate under write lock (short critical section).
         long term;
         long tBefore = System.nanoTime();
-        String prevHolder = lockHolder;
         writeLock.lock();
         long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
         if (waitMs > 50) {
-            LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "createSnapshotStreaming", waitMs, prevHolder);
+            LOG.warn("lock contention entering createSnapshotStreaming: waited {}ms", waitMs);
         }
         enterLock("createSnapshotStreaming:validate");
         try {
@@ -662,11 +657,10 @@ public class RocksDbStorage implements Storage, AutoCloseable {
 
         // Phase 1: validate under write lock (short critical section).
         long tBefore = System.nanoTime();
-        String prevHolder = lockHolder;
         writeLock.lock();
         long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
         if (waitMs > 50) {
-            LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "applySnapshot(stream)", waitMs, prevHolder);
+            LOG.warn("lock contention entering applySnapshot(stream): waited {}ms", waitMs);
         }
         enterLock("applySnapshot(stream):validate");
         try {
@@ -741,11 +735,10 @@ public class RocksDbStorage implements Storage, AutoCloseable {
 
         // Short critical section: check whether the incoming snapshot is stale.
         long tBefore = System.nanoTime();
-        String prevHolder = lockHolder;
         readLock.lock();
         long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
         if (waitMs > 50) {
-            LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "stageSnapshotData", waitMs, prevHolder);
+            LOG.warn("lock contention entering stageSnapshotData: waited {}ms", waitMs);
         }
         enterLock("stageSnapshotData");
         try {
@@ -937,11 +930,10 @@ public class RocksDbStorage implements Storage, AutoCloseable {
      */
     public  void setApplied(long applied) {
         long tBefore = System.nanoTime();
-        String prevHolder = lockHolder;
         writeLock.lock();
         long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
         if (waitMs > 50) {
-            LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "setApplied", waitMs, prevHolder);
+            LOG.warn("lock contention entering setApplied: waited {}ms", waitMs);
         }
         enterLock("setApplied");
         try {
@@ -991,12 +983,11 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                              Eraftpb.HardState hs,
                              Eraftpb.Snapshot snap) {
         long tBeforeLock = System.nanoTime();
-        String prevHolder = lockHolder;
         writeLock.lock();
         long tAfterLock = System.nanoTime();
         long lockWaitMs = (tAfterLock - tBeforeLock) / 1_000_000;
         if (lockWaitMs > 50) {
-            LOG.warn("lock contention entering {}: waited {}ms (was held by: {})", "writeBatched", lockWaitMs, prevHolder);
+            LOG.warn("lock contention entering writeBatched: waited {}ms", lockWaitMs);
         }
         enterLock("writeBatched");
         try {
