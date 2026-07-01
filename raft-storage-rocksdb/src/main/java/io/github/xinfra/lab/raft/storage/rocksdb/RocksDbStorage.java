@@ -631,6 +631,11 @@ public class RocksDbStorage implements Storage, AutoCloseable {
         writeLock.lock();
         enterLock("createSnapshotStreaming:commit");
         try {
+            Eraftpb.Snapshot existing = readSnapshotInternal();
+            if (existing != null && i <= existing.getMetadata().getIndex()) {
+                deleteOldSidecar(fileName, null);
+                throw RaftException.ErrSnapOutOfDate;
+            }
             String prevFile = readSnapshotFileName();
             try (WriteBatch wb = new WriteBatch()) {
                 wb.put(cfSnap, KEY_SNAPSHOT, meta.toByteArray());
@@ -640,7 +645,9 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                 throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
                         "rocksdb streaming createSnapshot failed", e);
             }
-            cachedFirstIndex = i + 1;
+            if (cachedFirstIndex < i + 1) {
+                cachedFirstIndex = i + 1;
+            }
             deleteOldSidecar(prevFile, fileName);
             return meta;
         } finally {
@@ -691,6 +698,11 @@ public class RocksDbStorage implements Storage, AutoCloseable {
         writeLock.lock();
         enterLock("applySnapshot(stream):commit");
         try {
+            Eraftpb.Snapshot existing = readSnapshotInternal();
+            if (existing != null && existing.getMetadata().getIndex() >= idx) {
+                deleteOldSidecar(fileName, null);
+                throw RaftException.ErrSnapOutOfDate;
+            }
             String prevFile = readSnapshotFileName();
             try (WriteBatch wb = new WriteBatch()) {
                 wb.put(cfSnap, KEY_SNAPSHOT, metaOnly.toByteArray());
@@ -701,7 +713,9 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                 throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
                         "rocksdb streaming applySnapshot failed", e);
             }
-            cachedFirstIndex = idx + 1;
+            if (cachedFirstIndex < idx + 1) {
+                cachedFirstIndex = idx + 1;
+            }
             if (cachedLastIndex < idx) cachedLastIndex = idx;
             deleteOldSidecar(prevFile, fileName);
         } finally {
