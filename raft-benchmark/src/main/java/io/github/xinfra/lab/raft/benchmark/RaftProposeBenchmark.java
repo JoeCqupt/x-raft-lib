@@ -37,6 +37,7 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
@@ -59,6 +60,9 @@ public class RaftProposeBenchmark {
     @State(Scope.Benchmark)
     public static class ClusterState {
 
+        /** Max in-flight proposals; acts as backpressure. */
+        private static final int MAX_INFLIGHT = 4096;
+
         @Param({"1024", "2048", "4096", "8192", "16384", "32768", "65536"})
         int payloadSize;
 
@@ -66,11 +70,13 @@ public class RaftProposeBenchmark {
         KvServer leader;
         Path tmpDir;
         KvCommand cmd;
+        Semaphore inflight;
         private final AtomicLong keySeq = new AtomicLong();
 
         @Setup(Level.Trial)
         public void setUp() throws Exception {
             tmpDir = Files.createTempDirectory("raft-bench-propose-");
+            inflight = new Semaphore(MAX_INFLIGHT);
 
             int[] raftPorts = findFreePorts(3);
             int[] kvPorts = findFreePorts(3);
@@ -121,12 +127,20 @@ public class RaftProposeBenchmark {
 
     @Benchmark
     public void propose(ClusterState state, ErrorCounters counters) {
-        try {
-            state.leader.proposeCommand(state.cmd).get(5, TimeUnit.SECONDS);
-            counters.success++;
-        } catch (Exception e) {
-            counters.errors++;
-        }
+        // Backpressure: block only when MAX_INFLIGHT proposals are outstanding.
+        // Each acquire corresponds to one eventual completion, so JMH throughput
+        // reflects actual committed ops/s once the pipeline is saturated.
+        state.inflight.acquireUninterruptibly();
+        state.leader.proposeCommand(state.cmd)
+                .orTimeout(5, TimeUnit.SECONDS)
+                .whenComplete((v, ex) -> {
+                    state.inflight.release();
+                    if (ex != null) {
+                        counters.errors++;
+                    } else {
+                        counters.success++;
+                    }
+                });
     }
 
     static KvServer waitForLeader(KvServer[] servers, long timeoutMs) throws InterruptedException {
