@@ -65,13 +65,6 @@ public class DefaultNode implements Node {
     private static final int TICK_BURST_LIMIT = 128;
     private final AtomicInteger pendingTicks = new AtomicInteger(0);
 
-    // Cap the number of events drained per Ready cycle. Without a cap, the
-    // drain loop can consume all 1024 queued events (e.g. a burst of 256
-    // MsgApp from the leader), inflating the unstable log so much that the
-    // subsequent writeBatched fsync takes seconds — triggering a starvation
-    // spiral where the node can never advance fast enough to keep up.
-    private static final int DEFAULT_MAX_DRAIN_PER_CYCLE = 128;
-    private final int maxDrainPerCycle = DEFAULT_MAX_DRAIN_PER_CYCLE;
 
     // ---- Advance signal (out-of-band, never competes for queue slots) ----
     // Set by the readyLoop thread (advance()), checked and cleared by the
@@ -245,22 +238,14 @@ public class DefaultNode implements Node {
                     // leader. Cheap (4 MDC puts), confined to this thread.
                     RaftMdc.set(r.id, r.term, r.state, r.lead);
 
-                    // Block until at least one event arrives.
+                    // Block until one event arrives, then dispatch it.
+                    // One event per iteration keeps the loop simple and
+                    // guarantees advance is always processed (at the top)
+                    // before the next event — eliminating race conditions
+                    // between advance and campaign/propose.
                     Event ev = events.take();
                     if (!(ev instanceof WakeEvent)) {
                         dispatch(r, ev);
-                    }
-                    // Drain remaining pending events without blocking.
-                    int drained = 0;
-                    while (drained < maxDrainPerCycle && (ev = events.poll()) != null) {
-                        if (!(ev instanceof WakeEvent)) {
-                            dispatch(r, ev);
-                        }
-                        drained++;
-                    }
-                    if (drained > 0) {
-                        r.logger.debug("{:x} drained {} events, queueRemaining={}",
-                                r.id, drained, events.size());
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
