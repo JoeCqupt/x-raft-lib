@@ -25,6 +25,9 @@ target/
 # flatten-maven-plugin output (release profile)
 .flattened-pom.xml
 
+# maven-shade-plugin output
+dependency-reduced-pom.xml
+
 # Jazzer runtime corpus state. Seeds + reproducer findings live under
 # src/test/resources/.../Inputs/ (committed); the cifuzz working dir is
 # per-run state we don't want to track.

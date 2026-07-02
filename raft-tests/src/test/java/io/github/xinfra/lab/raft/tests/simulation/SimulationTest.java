@@ -4,7 +4,7 @@
  * Licensed under the Apache License, Version 2.0 (the "License").
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.github.xinfra.lab.raft.internal.simulation;
+package io.github.xinfra.lab.raft.tests.simulation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

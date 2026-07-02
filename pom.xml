@@ -55,7 +55,7 @@
         <module>raft-storage-rocksdb</module>
         <module>raft-examples</module>
         <module>raft-tests</module>
-        <module>raft-simulation</module>
+        <module>raft-benchmark</module>
     </modules>
 
     <properties>

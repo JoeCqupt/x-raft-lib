@@ -250,26 +250,17 @@ public class DefaultNode implements Node {
                     if (!(ev instanceof WakeEvent)) {
                         dispatch(r, ev);
                     }
-                    // Drain remaining pending events without blocking — but
-                    // only when we can emit a Ready to flush the results.
-                    // During waitingAdvance the previous Ready hasn't been
-                    // written yet; draining more events just balloons the
-                    // unstable log, making the NEXT writeBatched even slower
-                    // and creating a starvation spiral.  Skipping the drain
-                    // keeps the loop responsive to advance/tick/heartbeat
-                    // while bounding unstable-log growth to 1 event per take.
-                    if (!waitingAdvance) {
-                        int drained = 0;
-                        while (drained < maxDrainPerCycle && (ev = events.poll()) != null) {
-                            if (!(ev instanceof WakeEvent)) {
-                                dispatch(r, ev);
-                            }
-                            drained++;
+                    // Drain remaining pending events without blocking.
+                    int drained = 0;
+                    while (drained < maxDrainPerCycle && (ev = events.poll()) != null) {
+                        if (!(ev instanceof WakeEvent)) {
+                            dispatch(r, ev);
                         }
-                        if (drained > 0) {
-                            r.logger.debug("{:x} drained {} events, queueRemaining={}",
-                                    r.id, drained, events.size());
-                        }
+                        drained++;
+                    }
+                    if (drained > 0) {
+                        r.logger.debug("{:x} drained {} events, queueRemaining={}",
+                                r.id, drained, events.size());
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();

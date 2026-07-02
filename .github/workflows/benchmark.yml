@@ -1,0 +1,184 @@
+name: benchmark
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: JMH Raft Benchmark
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Build benchmark uber-jar (skip tests & checks)
+        run: >-
+          mvn -B -ntp package
+          -pl raft-benchmark -am
+          -DskipTests
+          -Dcheckstyle.skip=true
+          -Dpmd.skip=true
+          -Dspotless.check.skip=true
+          -Djacoco.skip=true
+
+      - name: Run propose throughput & latency benchmark
+        run: >-
+          java -jar raft-benchmark/target/raft-benchmark.jar
+          RaftProposeBenchmark
+          -rf json -rff propose-result.json
+          -wi 3 -w 5s -i 5 -r 10s -f 1 -t 1
+
+      - name: Run linearizable read benchmark
+        run: >-
+          java -jar raft-benchmark/target/raft-benchmark.jar
+          RaftReadBenchmark
+          -rf json -rff read-result.json
+          -wi 3 -w 5s -i 5 -r 10s -f 1 -t 1
+
+      - name: Run concurrency scalability benchmark (4 threads)
+        run: >-
+          java -jar raft-benchmark/target/raft-benchmark.jar
+          RaftConcurrencyBenchmark
+          -rf json -rff concurrency-result.json
+          -wi 3 -w 5s -i 5 -r 10s -f 1 -t 4
+
+      - name: Merge results
+        run: |
+          python3 -c "
+          import json, glob
+          merged = []
+          for f in sorted(glob.glob('*-result.json')):
+              with open(f) as fh:
+                  merged.extend(json.load(fh))
+          with open('benchmark-result.json', 'w') as out:
+              json.dump(merged, out, indent=2)
+          "
+
+      - name: Generate benchmark summary
+        if: always()
+        run: |
+          if [ ! -f benchmark-result.json ]; then
+            echo "No benchmark results found." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          cat <<'PYEOF' > parse_results.py
+          import json
+
+          with open("benchmark-result.json") as f:
+              results = json.load(f)
+
+          thrpt = [r for r in results if r["mode"] == "thrpt"]
+          sample = [r for r in results if r["mode"] == "sample"]
+
+          if thrpt:
+              print("## Write Throughput\n")
+              print("| Benchmark | Payload | Threads | Ops/s | Error (±) | Errors |")
+              print("|-----------|--------:|--------:|------:|----------:|-------:|")
+              for r in sorted(thrpt, key=lambda x: (x["benchmark"], int(x.get("params", {}).get("payloadSize", "0")))):
+                  name = r["benchmark"].split(".")[-1]
+                  params = r.get("params", {})
+                  size = params.get("payloadSize", "-")
+                  if size != "-":
+                      kb = int(size) // 1024
+                      size = f"{kb}KB" if kb > 0 else size + "B"
+                  threads = r.get("threads", 1)
+                  score = r["primaryMetric"]["score"]
+                  error = r["primaryMetric"]["scoreError"]
+                  sec = r.get("secondaryMetrics", {})
+                  errs = sec.get("errors", {}).get("score", 0)
+                  print(f"| {name} | {size} | {threads} | {score:,.1f} | ±{error:,.1f} | {errs:,.0f} |")
+
+          if sample:
+              print("\n## Latency Percentiles\n")
+              print("| Benchmark | Payload | p50 | p90 | p99 | p99.9 | Errors |")
+              print("|-----------|--------:|----:|----:|----:|------:|-------:|")
+              for r in sorted(sample, key=lambda x: (x["benchmark"], int(x.get("params", {}).get("payloadSize", "0")))):
+                  name = r["benchmark"].split(".")[-1]
+                  params = r.get("params", {})
+                  size = params.get("payloadSize", "-")
+                  if size != "-":
+                      kb = int(size) // 1024
+                      size = f"{kb}KB" if kb > 0 else size + "B"
+                  pct = r["primaryMetric"].get("scorePercentiles", {})
+                  p50 = pct.get("50.0", 0)
+                  p90 = pct.get("90.0", 0)
+                  p99 = pct.get("99.0", 0)
+                  p999 = pct.get("99.9", 0)
+                  unit = r["primaryMetric"].get("scoreUnit", "ms/op")
+                  sec = r.get("secondaryMetrics", {})
+                  errs = sec.get("errors", {}).get("score", 0)
+                  print(f"| {name} | {size} | {p50:.2f} | {p90:.2f} | {p99:.2f} | {p999:.2f} | {errs:,.0f} | ({unit})")
+
+          if thrpt:
+              print("\n### Throughput Chart\n```")
+              max_score = max(r["primaryMetric"]["score"] for r in thrpt)
+              for r in sorted(thrpt, key=lambda x: (x["benchmark"], int(x.get("params", {}).get("payloadSize", "0")))):
+                  name = r["benchmark"].split(".")[-1]
+                  params = r.get("params", {})
+                  size = params.get("payloadSize", "-")
+                  if size != "-":
+                      kb = int(size) // 1024
+                      label = f"{kb}KB" if kb > 0 else size + "B"
+                  else:
+                      label = name[:8]
+                  score = r["primaryMetric"]["score"]
+                  bar_len = int(score / max_score * 40) if max_score > 0 else 0
+                  print(f"  {label:>6s} | {'█' * bar_len} {score:,.0f} ops/s")
+              print("```")
+          PYEOF
+
+          python3 parse_results.py >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Store benchmark result (main only)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Raft KV Benchmark
+          tool: jmh
+          output-file-path: benchmark-result.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          alert-threshold: '150%'
+          comment-on-alert: true
+          fail-on-alert: false
+
+      - name: Comment benchmark on PR
+        if: github.event_name == 'pull_request'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Raft KV Benchmark
+          tool: jmh
+          output-file-path: benchmark-result.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: false
+          comment-on-alert: true
+          alert-threshold: '150%'
+          fail-on-alert: false
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            benchmark-result.json
+            propose-result.json
+            read-result.json
+            concurrency-result.json
+          retention-days: 30
+          if-no-files-found: ignore
