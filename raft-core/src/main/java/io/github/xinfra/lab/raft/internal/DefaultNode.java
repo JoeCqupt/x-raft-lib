@@ -510,11 +510,7 @@ public class DefaultNode implements Node {
             if (proposalsDisabled) throw RaftException.ErrProposalDropped;
             events.put(new ProposeEvent(msg, null));
         } else {
-            // Non-blocking: drop when the queue is full rather than blocking
-            // the gRPC receiver thread. A blocked receiver thread makes the
-            // node's entire gRPC server UNAVAILABLE, which is far worse than
-            // a dropped message — the sender will retry via heartbeat/pipeline.
-            events.offer(new RecvEvent(msg));
+            events.put(new RecvEvent(msg));
         }
     }
 
