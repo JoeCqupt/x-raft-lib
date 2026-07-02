@@ -162,8 +162,18 @@ public class DefaultNode implements Node {
         return eventLoop;
     }
 
+    /** Maximum events to drain per iteration before yielding to Ready emission. */
+    private static final int DRAIN_BATCH_LIMIT = 128;
+
     /**
      * The main event loop, corresponding to node.run() in Go.
+     *
+     * <p>Uses a drain model: blocks on the first event via {@code take()}, then
+     * non-blocking {@code poll()}s up to {@link #DRAIN_BATCH_LIMIT} additional
+     * events. After each take/poll the out-of-band advance flag is checked,
+     * ensuring advance is always processed promptly regardless of batch size.
+     * Once the drain completes, the loop emits Ready (batching all accumulated
+     * entries into a single fsync) and updates liveness state.
      */
     private void run() {
         Raft r = rn.raft;
@@ -177,20 +187,10 @@ public class DefaultNode implements Node {
         try {
             while (!stopped.get()) {
                 try {
-                    // Process out-of-band advance flag before checking Ready.
-                    if (advancePending.compareAndSet(true, false)) {
-                        if (waitingAdvance) {
-                            long advanceLatencyMs = (System.nanoTime() - waitingAdvanceSince) / 1_000_000;
-                            r.logger.debug("{:x} advance after {}ms, queueSize={}, unstable={}",
-                                    r.id, advanceLatencyMs, events.size(),
-                                    r.raftLog.unstable.getEntries().size());
-                            rn.advance(null);
-                            waitingAdvance = false;
-                        }
-                    }
-
                     // Emit Ready if available and not waiting for Advance.
                     // readyc is unbounded so put never blocks the loop.
+                    // Placed before drain so all entries accumulated in the
+                    // previous drain are flushed in one Ready/fsync.
                     if (!waitingAdvance && rn.hasReady()) {
                         Ready rd = rn.readyWithoutAccept();
                         r.logger.debug("{:x} emitting Ready: entries={} committed={} messages={} snapshot={} unstable={}",
@@ -225,37 +225,45 @@ public class DefaultNode implements Node {
                         r.metrics.onLeaderChange(r.lead, r.term);
                     }
                     // Update the lock-free liveness mirror used by basicStatus().
-                    // Done every loop iteration so a stuck consumer of Ready
-                    // can still observe term/commit progress.
                     liveTerm.lazySet(r.term);
                     liveLead.lazySet(r.lead);
                     liveCommit.lazySet(r.raftLog.committed);
                     liveApplied.lazySet(r.raftLog.applied);
                     liveLastIndex.lazySet(r.raftLog.lastIndex());
                     liveState = r.state;
-                    // Refresh structured logging context so logs emitted while
-                    // handling the next event carry the current id/term/role/
-                    // leader. Cheap (4 MDC puts), confined to this thread.
+                    // Refresh structured logging context.
                     RaftMdc.set(r.id, r.term, r.state, r.lead);
 
-                    // Block until one event arrives, then dispatch it.
-                    // One event per iteration keeps the loop simple and
-                    // guarantees advance is always processed (at the top)
-                    // before the next event — eliminating race conditions
-                    // between advance and campaign/propose.
+                    // --- Drain loop: block on first event, then poll up to limit ---
                     Event ev = events.take();
-                    if (!(ev instanceof WakeEvent)) {
-                        dispatch(r, ev);
-                    }
+                    int drained = 0;
+                    do {
+                        // Check advance after each take/poll — ensures advance
+                        // is never delayed by queued events.
+                        if (advancePending.compareAndSet(true, false)) {
+                            if (waitingAdvance) {
+                                long advanceLatencyMs = (System.nanoTime() - waitingAdvanceSince) / 1_000_000;
+                                r.logger.debug("{:x} advance after {}ms, queueSize={}, unstable={}",
+                                        r.id, advanceLatencyMs, events.size(),
+                                        r.raftLog.unstable.getEntries().size());
+                                rn.advance(null);
+                                waitingAdvance = false;
+                            }
+                        }
+                        // Dispatch the event.
+                        if (!(ev instanceof WakeEvent)) {
+                            dispatch(r, ev);
+                        }
+                        drained++;
+                    } while (drained < DRAIN_BATCH_LIMIT && (ev = events.poll()) != null);
+
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
                 } catch (Throwable t) {
                     // dispatch() or rn.hasReady()/readyc.put() raised an unchecked
                     // exception (raft state invariant violation, application
-                    // callback bug, etc.). Log and exit the loop cleanly. Cleanup
-                    // is in the outer finally so even a logger failure here can't
-                    // strand producers blocked on events.put().
+                    // callback bug, etc.). Log and exit the loop cleanly.
                     try {
                         rn.raft.logger.error("raft.node: event loop terminated by uncaught exception: {}", t);
                     } catch (Throwable ignored) {
@@ -265,12 +273,9 @@ public class DefaultNode implements Node {
                 }
             }
         } finally {
-            // MUST run even if the loop exits via an unchecked exception that
-            // escaped the inner catches. Without this, producers blocked on
-            // events.put() (queue full, consumer dead) would hang forever.
+            // MUST run even if the loop exits via an unchecked exception.
             // Order matters: set done first so any future producer sees ErrStopped
-            // at the top check, then drain pending waiters and unblock anyone
-            // currently parked on a full-queue put().
+            // at the top check, then drain pending waiters.
             done = true;
             drainPendingOnStop();
             synchronized (stopSignal) {
