@@ -154,8 +154,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     private volatile long cachedFirstIndex;
 
     private volatile boolean closed = false;
-    private static final ThreadLocal<String> lockHolder = ThreadLocal.withInitial(() -> "none");
-    private static final ThreadLocal<Long> lockHeldSince = ThreadLocal.withInitial(() -> 0L);
 
     public RocksDbStorage(Path dir) throws RocksDBException, IOException {
         this(dir, RocksDbStorageOptions.DEFAULT);
@@ -229,28 +227,11 @@ public class RocksDbStorage implements Storage, AutoCloseable {
         this.cachedFirstIndex = computeRawFirstIndex();
     }
 
-    private void enterLock(String methodName) {
-        lockHolder.set(methodName);
-        lockHeldSince.set(System.nanoTime());
-    }
-
-    private void exitLock() {
-        long startNs = lockHeldSince.get();
-        long heldMs = startNs == 0 ? 0 : (System.nanoTime() - startNs) / 1_000_000;
-        String holder = lockHolder.get();
-        lockHolder.set("none");
-        lockHeldSince.set(0L);
-        if (heldMs > 100) {
-            LOG.warn("lock held too long by {}: {}ms", holder, heldMs);
-        }
-    }
-
     // ====================== Storage read API ======================
 
     @Override
     public InitialStateResult initialState() {
         readLock.lock();
-        enterLock("initialState");
         try {
             byte[] hsBytes = db.get(cfState, KEY_HARD_STATE);
             Eraftpb.HardState hs = hsBytes == null
@@ -274,7 +255,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
                     "rocksdb initialState read failed", e);
         } finally {
-            exitLock();
             readLock.unlock();
         }
     }
@@ -282,7 +262,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     @Override
     public  List<Eraftpb.Entry> entries(long lo, long hi, long maxSize) throws RaftException {
         readLock.lock();
-        enterLock("entries");
         try {
             long first = firstIndexNoLock();
             long last = lastIndexNoLock();
@@ -312,7 +291,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             }
             return result;
         } finally {
-            exitLock();
             readLock.unlock();
         }
     }
@@ -320,11 +298,9 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     @Override
     public  long term(long i) throws RaftException {
         readLock.lock();
-        enterLock("term");
         try {
             return termNoLock(i);
         } finally {
-            exitLock();
             readLock.unlock();
         }
     }
@@ -401,12 +377,10 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     @Override
     public  Eraftpb.Snapshot snapshot() throws RaftException {
         readLock.lock();
-        enterLock("snapshot");
         try {
             Eraftpb.Snapshot snap = readSnapshotInternal();
             return snap == null ? Eraftpb.Snapshot.getDefaultInstance() : snap;
         } finally {
-            exitLock();
             readLock.unlock();
         }
     }
@@ -416,7 +390,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     @Override
     public  void setHardState(Eraftpb.HardState hs) {
         writeLock.lock();
-        enterLock("setHardState");
         try {
             try (WriteBatch wb = new WriteBatch()) {
                 wb.put(cfState, KEY_HARD_STATE, hs.toByteArray());
@@ -426,20 +399,13 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                         "rocksdb setHardState failed", e);
             }
         } finally {
-            exitLock();
             writeLock.unlock();
         }
     }
 
     @Override
     public  void append(List<Eraftpb.Entry> entries) {
-        long tBefore = System.nanoTime();
         writeLock.lock();
-        long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
-        if (waitMs > 50) {
-            LOG.warn("lock contention entering append: waited {}ms", waitMs);
-        }
-        enterLock("append");
         try {
             if (entries == null || entries.isEmpty()) return;
             try (WriteBatch wb = new WriteBatch()) {
@@ -451,20 +417,13 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             }
             cachedLastIndex = entries.get(entries.size() - 1).getIndex();
         } finally {
-            exitLock();
             writeLock.unlock();
         }
     }
 
     @Override
     public  void applySnapshot(Eraftpb.Snapshot snap) throws RaftException {
-        long tBefore = System.nanoTime();
         writeLock.lock();
-        long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
-        if (waitMs > 50) {
-            LOG.warn("lock contention entering applySnapshot: waited {}ms", waitMs);
-        }
-        enterLock("applySnapshot");
         try {
             if (alreadyInstalledOutOfBand(snap)) {
                 return;
@@ -488,20 +447,13 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             if (cachedLastIndex < snapIdx) cachedLastIndex = snapIdx;
             deleteOldSidecar(prevFile, null);
         } finally {
-            exitLock();
             writeLock.unlock();
         }
     }
 
     @Override
     public  Eraftpb.Snapshot createSnapshot(long i, Eraftpb.ConfState cs, byte[] data) throws RaftException {
-        long tBefore = System.nanoTime();
         writeLock.lock();
-        long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
-        if (waitMs > 50) {
-            LOG.warn("lock contention entering createSnapshot: waited {}ms", waitMs);
-        }
-        enterLock("createSnapshot");
         try {
             Eraftpb.Snapshot existing = readSnapshotInternal();
             if (existing != null && i <= existing.getMetadata().getIndex()) {
@@ -536,20 +488,13 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             deleteOldSidecar(prevFile, null);
             return snap;
         } finally {
-            exitLock();
             writeLock.unlock();
         }
     }
 
     @Override
     public  void compact(long compactIndex) throws RaftException {
-        long tBefore = System.nanoTime();
         writeLock.lock();
-        long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
-        if (waitMs > 50) {
-            LOG.warn("lock contention entering compact: waited {}ms", waitMs);
-        }
-        enterLock("compact");
         try {
             long first = firstIndexNoLock();
             if (compactIndex < first) throw RaftException.ErrCompacted;
@@ -567,7 +512,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                 cachedFirstIndex = compactIndex + 1;
             }
         } finally {
-            exitLock();
             writeLock.unlock();
         }
     }
@@ -584,13 +528,7 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             throws RaftException, IOException {
         // Phase 1: validate under write lock (short critical section).
         long term;
-        long tBefore = System.nanoTime();
         writeLock.lock();
-        long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
-        if (waitMs > 50) {
-            LOG.warn("lock contention entering createSnapshotStreaming: waited {}ms", waitMs);
-        }
-        enterLock("createSnapshotStreaming:validate");
         try {
             Eraftpb.Snapshot existing = readSnapshotInternal();
             if (existing != null && i <= existing.getMetadata().getIndex()) {
@@ -605,7 +543,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                 throw new RaftInvariantException("createSnapshot: term(" + i + ") failed: " + e.code(), e);
             }
         } finally {
-            exitLock();
             writeLock.unlock();
         }
 
@@ -629,7 +566,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
         Eraftpb.Snapshot meta = Eraftpb.Snapshot.newBuilder().setMetadata(mb).build();
 
         writeLock.lock();
-        enterLock("createSnapshotStreaming:commit");
         try {
             Eraftpb.Snapshot existing = readSnapshotInternal();
             if (existing != null && i <= existing.getMetadata().getIndex()) {
@@ -651,7 +587,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             deleteOldSidecar(prevFile, fileName);
             return meta;
         } finally {
-            exitLock();
             writeLock.unlock();
         }
     }
@@ -663,20 +598,13 @@ public class RocksDbStorage implements Storage, AutoCloseable {
         long term = meta.getMetadata().getTerm();
 
         // Phase 1: validate under write lock (short critical section).
-        long tBefore = System.nanoTime();
         writeLock.lock();
-        long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
-        if (waitMs > 50) {
-            LOG.warn("lock contention entering applySnapshot(stream): waited {}ms", waitMs);
-        }
-        enterLock("applySnapshot(stream):validate");
         try {
             Eraftpb.Snapshot existing = readSnapshotInternal();
             if (existing != null && existing.getMetadata().getIndex() >= idx) {
                 throw RaftException.ErrSnapOutOfDate;
             }
         } finally {
-            exitLock();
             writeLock.unlock();
         }
 
@@ -696,7 +624,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
         // Phase 3: persist metadata + truncate log under write lock.
         Eraftpb.Snapshot metaOnly = meta.toBuilder().clearData().build();
         writeLock.lock();
-        enterLock("applySnapshot(stream):commit");
         try {
             Eraftpb.Snapshot existing = readSnapshotInternal();
             if (existing != null && existing.getMetadata().getIndex() >= idx) {
@@ -719,7 +646,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             if (cachedLastIndex < idx) cachedLastIndex = idx;
             deleteOldSidecar(prevFile, fileName);
         } finally {
-            exitLock();
             writeLock.unlock();
         }
     }
@@ -748,13 +674,7 @@ public class RocksDbStorage implements Storage, AutoCloseable {
         long term = meta.getMetadata().getTerm();
 
         // Short critical section: check whether the incoming snapshot is stale.
-        long tBefore = System.nanoTime();
         readLock.lock();
-        long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
-        if (waitMs > 50) {
-            LOG.warn("lock contention entering stageSnapshotData: waited {}ms", waitMs);
-        }
-        enterLock("stageSnapshotData");
         try {
             Eraftpb.Snapshot existing = readSnapshotInternal();
             if (existing != null && existing.getMetadata().getIndex() >= idx) {
@@ -762,7 +682,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                 return;
             }
         } finally {
-            exitLock();
             readLock.unlock();
         }
 
@@ -783,7 +702,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     @Override
     public  InputStream openSnapshotData(Eraftpb.Snapshot snap) throws RaftException, IOException {
         readLock.lock();
-        enterLock("openSnapshotData");
         try {
             String fileName = readSnapshotFileName();
             if (fileName != null) {
@@ -799,7 +717,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                     snap != null ? snap.getData() : com.google.protobuf.ByteString.EMPTY;
             return inline.newInput();
         } finally {
-            exitLock();
             readLock.unlock();
         }
     }
@@ -875,7 +792,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     @Override
     public  void close() {
         writeLock.lock();
-        enterLock("close");
         try {
             if (closed) return;
             closed = true;
@@ -907,7 +823,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                 LOG.warn("close blockCache failed: {}", t.toString());
             }
         } finally {
-            exitLock();
             writeLock.unlock();
         }
     }
@@ -921,7 +836,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
      */
     public  long getApplied() {
         readLock.lock();
-        enterLock("getApplied");
         try {
             byte[] v = db.get(cfState, KEY_APPLIED);
             if (v == null || v.length != 8) return 0;
@@ -930,7 +844,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
                     "rocksdb getApplied failed", e);
         } finally {
-            exitLock();
             readLock.unlock();
         }
     }
@@ -943,13 +856,7 @@ public class RocksDbStorage implements Storage, AutoCloseable {
      * restart.
      */
     public  void setApplied(long applied) {
-        long tBefore = System.nanoTime();
         writeLock.lock();
-        long waitMs = (System.nanoTime() - tBefore) / 1_000_000;
-        if (waitMs > 50) {
-            LOG.warn("lock contention entering setApplied: waited {}ms", waitMs);
-        }
-        enterLock("setApplied");
         try {
             byte[] v = ByteBuffer.allocate(8).putLong(applied).array();
             db.put(cfState, writeOpts, KEY_APPLIED, v);
@@ -957,7 +864,6 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
                     "rocksdb setApplied failed", e);
         } finally {
-            exitLock();
             writeLock.unlock();
         }
     }
@@ -971,14 +877,12 @@ public class RocksDbStorage implements Storage, AutoCloseable {
      */
     public  void setConfState(Eraftpb.ConfState cs) {
         writeLock.lock();
-        enterLock("setConfState");
         try {
             db.put(cfState, writeOpts, KEY_CONF_STATE, cs.toByteArray());
         } catch (RocksDBException e) {
             throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
                     "rocksdb setConfState failed", e);
         } finally {
-            exitLock();
             writeLock.unlock();
         }
     }
@@ -996,16 +900,8 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     public void writeBatched(List<Eraftpb.Entry> entries,
                              Eraftpb.HardState hs,
                              Eraftpb.Snapshot snap) {
-        long tBeforeLock = System.nanoTime();
         writeLock.lock();
-        long tAfterLock = System.nanoTime();
-        long lockWaitMs = (tAfterLock - tBeforeLock) / 1_000_000;
-        if (lockWaitMs > 50) {
-            LOG.warn("lock contention entering writeBatched: waited {}ms", lockWaitMs);
-        }
-        enterLock("writeBatched");
         try {
-            long tStart = System.nanoTime();
             boolean snapApplied = snap != null && !isEmptySnap(snap);
             String linkFile = null;
             if (snapApplied && alreadyInstalledOutOfBand(snap)) {
@@ -1017,11 +913,7 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                 }
             }
             String prevFile = snapApplied ? readSnapshotFileName() : null;
-            long tPrepSnapDone = System.nanoTime();
 
-            int batchCount = 0;
-            long tBuildBatchDone;
-            long tDbWriteDone;
             try (WriteBatch wb = new WriteBatch()) {
                 if (entries != null && !entries.isEmpty()) appendIntoBatch(wb, entries);
                 if (hs != null && !isEmptyHardState(hs)) {
@@ -1035,26 +927,23 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                         wb.delete(cfState, KEY_SNAPSHOT_FILE);
                     }
                     long snapIdx = snap.getMetadata().getIndex();
-                    long tDeleteRange = System.nanoTime();
                     wb.deleteRange(cfLog, indexKey(0), indexKey(snapIdx + 1));
-                    long deleteRangeMs = (System.nanoTime() - tDeleteRange) / 1_000_000;
-                    if (deleteRangeMs > 50) {
-                        LOG.debug("snapshot log truncation deleteRange(0, {}) took {}ms",
-                                snapIdx + 1, deleteRangeMs);
+                }
+                if (wb.count() > 0) {
+                    long t0 = System.nanoTime();
+                    db.write(writeOpts, wb);
+                    long dbWriteMs = (System.nanoTime() - t0) / 1_000_000;
+                    if (dbWriteMs > 500) {
+                        LOG.warn("SLOW db.write(): {}ms (batch ops={}, entries={}, snapApplied={})",
+                                dbWriteMs, wb.count(),
+                                entries == null ? 0 : entries.size(), snapApplied);
                     }
                 }
-                tBuildBatchDone = System.nanoTime();
-                batchCount = wb.count();
-                if (batchCount > 0) {
-                    db.write(writeOpts, wb);
-                }
-                tDbWriteDone = System.nanoTime();
             } catch (RocksDBException e) {
                 throw new RaftInvariantException(RaftInvariantException.Category.STORAGE_IO,
                         "rocksdb writeBatched failed", e);
             }
 
-            // Update index caches after successful write.
             if (entries != null && !entries.isEmpty()) {
                 cachedLastIndex = entries.get(entries.size() - 1).getIndex();
             }
@@ -1065,27 +954,7 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             }
 
             if (snapApplied) deleteOldSidecar(prevFile, linkFile);
-            long tEnd = System.nanoTime();
-
-            long totalMs = (tEnd - tStart) / 1_000_000;
-            long prepSnapMs = (tPrepSnapDone - tStart) / 1_000_000;
-            long buildBatchMs = (tBuildBatchDone - tPrepSnapDone) / 1_000_000;
-            long dbWriteMs = (tDbWriteDone - tBuildBatchDone) / 1_000_000;
-            long cleanupMs = (tEnd - tDbWriteDone) / 1_000_000;
-
-            if (dbWriteMs > 500) {
-                LOG.warn("SLOW db.write(): {}ms (batch ops={}, entries={}, snapApplied={})",
-                        dbWriteMs, batchCount,
-                        entries == null ? 0 : entries.size(), snapApplied);
-            }
-            if (totalMs > 100 || lockWaitMs > 50) {
-                LOG.debug("writeBatched: total={}ms lockWait={}ms [prepSnap={}ms buildBatch={}ms dbWrite={}ms cleanup={}ms] entries={} snap={}",
-                        totalMs, lockWaitMs, prepSnapMs, buildBatchMs, dbWriteMs, cleanupMs,
-                        entries == null ? 0 : entries.size(),
-                        snapApplied ? snap.getMetadata().getIndex() : 0);
-            }
         } finally {
-            exitLock();
             writeLock.unlock();
         }
     }
