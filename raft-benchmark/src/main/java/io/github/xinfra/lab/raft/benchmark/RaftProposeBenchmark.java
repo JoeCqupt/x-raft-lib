@@ -37,33 +37,28 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.Stream;
 
-@BenchmarkMode({Mode.Throughput, Mode.SampleTime})
-@OutputTimeUnit(TimeUnit.MILLISECONDS)
 @Warmup(iterations = 3, time = 5)
 @Measurement(iterations = 5, time = 10)
 @Fork(1)
 @Threads(1)
 public class RaftProposeBenchmark {
 
-    @AuxCounters(AuxCounters.Type.EVENTS)
-    @State(Scope.Thread)
-    public static class ErrorCounters {
-        public long success;
-        public long errors;
-    }
+    // ======== Shared cluster state ========
 
     @State(Scope.Benchmark)
     public static class ClusterState {
 
-        /** Max in-flight proposals; acts as backpressure. */
-        private static final int MAX_INFLIGHT = 4096;
+        static final int MAX_INFLIGHT = 1024;
 
-        @Param({"1024", "2048", "4096", "8192", "16384", "32768", "65536"})
+        @Param({"128", "1024", "4096", "16384", "65536"})
         int payloadSize;
 
         KvServer[] servers;
@@ -71,7 +66,6 @@ public class RaftProposeBenchmark {
         Path tmpDir;
         KvCommand cmd;
         Semaphore inflight;
-        private final AtomicLong keySeq = new AtomicLong();
 
         @Setup(Level.Trial)
         public void setUp() throws Exception {
@@ -107,6 +101,14 @@ public class RaftProposeBenchmark {
 
         @TearDown(Level.Trial)
         public void tearDown() throws Exception {
+            // Drain in-flight async proposals before shutting down.
+            try {
+                inflight.acquire(MAX_INFLIGHT);
+                inflight.release(MAX_INFLIGHT);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+
             if (servers != null) {
                 for (int i = servers.length - 1; i >= 0; i--) {
                     if (servers[i] != null) {
@@ -125,23 +127,83 @@ public class RaftProposeBenchmark {
         }
     }
 
+    // ======== Sync counters (per-thread, safe for JMH AuxCounters) ========
+
+    @AuxCounters(AuxCounters.Type.EVENTS)
+    @State(Scope.Thread)
+    public static class SyncCounters {
+        public long success;
+        public long errors;
+        public long timeouts;
+    }
+
+    // ======== Async metrics (shared, thread-safe via LongAdder) ========
+
+    @State(Scope.Benchmark)
+    public static class AsyncMetrics {
+        final LongAdder success = new LongAdder();
+        final LongAdder errors = new LongAdder();
+        final LongAdder timeouts = new LongAdder();
+        final LongAdder totalLatencyUs = new LongAdder();
+
+        @TearDown(Level.Iteration)
+        public void report() {
+            long s = success.sumThenReset();
+            long e = errors.sumThenReset();
+            long t = timeouts.sumThenReset();
+            long lat = totalLatencyUs.sumThenReset();
+            System.out.printf("[async propose] success=%d errors=%d timeouts=%d avgLatency=%.1fus%n",
+                    s, e, t, s > 0 ? (double) lat / s : 0);
+        }
+    }
+
+    // ======== Sync propose ========
+
     @Benchmark
-    public void propose(ClusterState state, ErrorCounters counters) {
-        // Backpressure: block only when MAX_INFLIGHT proposals are outstanding.
-        // Each acquire corresponds to one eventual completion, so JMH throughput
-        // reflects actual committed ops/s once the pipeline is saturated.
+    @BenchmarkMode({Mode.Throughput, Mode.SampleTime})
+    @OutputTimeUnit(TimeUnit.MILLISECONDS)
+    public void syncPropose(ClusterState state, SyncCounters counters) {
+        try {
+            state.leader.proposeCommand(state.cmd).get(5, TimeUnit.SECONDS);
+            counters.success++;
+        } catch (TimeoutException e) {
+            counters.timeouts++;
+        } catch (ExecutionException e) {
+            counters.errors++;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            counters.errors++;
+        }
+    }
+
+    // ======== Async propose ========
+
+    @Benchmark
+    @BenchmarkMode(Mode.Throughput)
+    @OutputTimeUnit(TimeUnit.MILLISECONDS)
+    public void asyncPropose(ClusterState state, AsyncMetrics metrics) {
+        long startNs = System.nanoTime();
         state.inflight.acquireUninterruptibly();
         state.leader.proposeCommand(state.cmd)
                 .orTimeout(5, TimeUnit.SECONDS)
                 .whenComplete((v, ex) -> {
                     state.inflight.release();
+                    long latencyUs = (System.nanoTime() - startNs) / 1000;
                     if (ex != null) {
-                        counters.errors++;
+                        Throwable cause = ex instanceof CompletionException ? ex.getCause() : ex;
+                        if (cause instanceof TimeoutException) {
+                            metrics.timeouts.increment();
+                        } else {
+                            metrics.errors.increment();
+                        }
                     } else {
-                        counters.success++;
+                        metrics.success.increment();
+                        metrics.totalLatencyUs.add(latencyUs);
                     }
                 });
     }
+
+    // ======== Utilities ========
 
     static KvServer waitForLeader(KvServer[] servers, long timeoutMs) throws InterruptedException {
         long deadline = System.currentTimeMillis() + timeoutMs;

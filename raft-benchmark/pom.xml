@@ -31,6 +31,11 @@
     <dependencies>
         <dependency>
             <groupId>io.github.x-infra-lab</groupId>
+            <artifactId>raft-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.x-infra-lab</groupId>
             <artifactId>raft-examples</artifactId>
             <version>${project.version}</version>
         </dependency>

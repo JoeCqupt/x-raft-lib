@@ -9,7 +9,7 @@ All measurements:
 - Warmup: 2 iterations × 1 second
 - Measurement: 3 iterations × 2 seconds
 - Forks: 1
-- Run via `mvn test-compile && java -cp ... io.github.xinfra.lab.raft.RaftBenchmarks <pattern>`
+- Run via `java -jar raft-benchmark/target/raft-benchmark.jar RaftCoreBenchmarks`
 
 These numbers should be regenerated and compared whenever:
 1. Anything in the `Unstable`, `RaftLog`, `Raft`, or `ReadOnly` hot path is
@@ -121,15 +121,14 @@ fixes' wins.
 ## Reproducing this baseline
 
 ```bash
-cd x-raft-lib/raft-core
-mvn test-compile
-CP=$(mvn -q dependency:build-classpath -DincludeScope=test -Dmdep.outputFile=/dev/stdout)
+cd x-raft-lib
+mvn -B -ntp package -pl raft-benchmark -am -DskipTests
 
-# All benchmarks (~15 min)
-java -cp "target/test-classes:target/classes:$CP" io.github.xinfra.lab.raft.RaftBenchmarks
+# All core benchmarks (~15 min)
+java -jar raft-benchmark/target/raft-benchmark.jar RaftCoreBenchmarks
 
 # A specific benchmark
-java -cp "target/test-classes:target/classes:$CP" io.github.xinfra.lab.raft.RaftBenchmarks unstableStableToInChunks
+java -jar raft-benchmark/target/raft-benchmark.jar unstableStableToInChunks
 ```
 
 Last updated: 2026-05-22 (review round 9).

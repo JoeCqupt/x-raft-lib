@@ -221,9 +221,9 @@ the host.
 
 ## Benchmarks
 
-⚠️ **No comparative numbers published yet.** A JMH harness for
-hot-path raft operations lives at
-[`raft-core/src/test/.../RaftBenchmarks.java`](raft-core/src/test/java/io/github/xinfra/lab/raft/internal/RaftBenchmarks.java);
+⚠️ **No comparative numbers published yet.** JMH benchmarks for
+hot-path raft operations live in the
+[`raft-benchmark`](raft-benchmark/src/main/java/io/github/xinfra/lab/raft/benchmark/) module;
 fair head-to-head numbers against etcd-raft and sofa-jraft require an
 isolated benchmark host (no shared CI runner) and are tracked in the
 roadmap.
@@ -231,11 +231,11 @@ roadmap.
 Run the JMH suite locally:
 
 ```bash
-mvn -pl raft-core test-compile
-java -cp "raft-core/target/test-classes:raft-core/target/classes:$(mvn -pl raft-core -q dependency:build-classpath -Dmdep.outputFile=/dev/stdout)" \
-     io.github.xinfra.lab.raft.internal.RaftBenchmarks
+mvn -B -ntp package -pl raft-benchmark -am -DskipTests
+# core micro-benchmarks:
+java -jar raft-benchmark/target/raft-benchmark.jar RaftCoreBenchmarks
 # specific benchmark:
-java ... io.github.xinfra.lab.raft.internal.RaftBenchmarks proposeAndDrain
+java -jar raft-benchmark/target/raft-benchmark.jar proposeAndDrain
 ```
 
 For an end-to-end soak (3-node cluster, sustained propose load,
