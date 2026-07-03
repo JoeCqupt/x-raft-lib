@@ -154,8 +154,12 @@ final class TestRaftNode implements AutoCloseable {
         try {
             while (running) {
                 Ready rd = node.ready();
-                storage.writeBatched(rd.entries(), rd.hardState(), rd.snapshot());
 
+                long t0 = System.nanoTime();
+                storage.writeBatched(rd.entries(), rd.hardState(), rd.snapshot());
+                long t1 = System.nanoTime();
+
+                int msgCount = 0;
                 if (rd.messages() != null) {
                     for (Eraftpb.Message m : rd.messages()) {
                         if (m.getTo() == id) continue;
@@ -164,8 +168,10 @@ final class TestRaftNode implements AutoCloseable {
                         } else {
                             transport.send(m.getTo(), m);
                         }
+                        msgCount++;
                     }
                 }
+                long t2 = System.nanoTime();
 
                 if (rd.snapshot().getMetadata().getIndex() > 0) {
                     byte[] appData;
@@ -200,8 +206,25 @@ final class TestRaftNode implements AutoCloseable {
                         storage.setApplied(highestApplied);
                     }
                 }
+                long t3 = System.nanoTime();
 
                 node.advance();
+                long t4 = System.nanoTime();
+
+                long totalMs = (t4 - t0) / 1_000_000;
+                if (totalMs > 100) {
+                    LOG.debug("node {} readyLoop: total={}ms write={}ms send={}ms apply={}ms advance={}ms "
+                                    + "entries={} committed={} messages={} snapshot={}",
+                            id, totalMs,
+                            (t1 - t0) / 1_000_000,
+                            (t2 - t1) / 1_000_000,
+                            (t3 - t2) / 1_000_000,
+                            (t4 - t3) / 1_000_000,
+                            rd.entries().size(),
+                            rd.committedEntries().size(),
+                            msgCount,
+                            rd.snapshot().getMetadata().getIndex() > 0 ? rd.snapshot().getMetadata().getIndex() : 0);
+                }
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

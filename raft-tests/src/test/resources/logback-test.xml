@@ -4,12 +4,12 @@
             <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{16} - %msg%n</pattern>
         </encoder>
     </appender>
-    <root level="DEBUG">
+    <root level="INFO">
         <appender-ref ref="STDOUT"/>
     </root>
     <logger name="io.grpc" level="WARN"/>
     <logger name="io.grpc.netty" level="WARN"/>
     <logger name="io.grpc.netty.shaded" level="WARN"/>
     <!-- Keep raft state-machine logs at INFO so test failures have context. -->
-    <logger name="raft" level="DEBUG"/>
+    <logger name="raft" level="INFO"/>
 </configuration>

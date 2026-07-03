@@ -71,7 +71,7 @@ jobs:
       - name: Build & test (Windows; skip rocksdb modules)
         if: matrix.os == 'windows-latest'
         shell: bash
-        run: mvn -B -ntp install -Djacoco.skip=true -pl '!raft-storage-rocksdb,!raft-tests,!raft-examples'
+        run: mvn -B -ntp install -Djacoco.skip=true -pl '!raft-storage-rocksdb,!raft-tests,!raft-examples,!raft-benchmark'
 
       - name: Upload JaCoCo HTML reports
         if: always() && matrix.os == 'ubuntu-latest' && matrix.jdk == '17'

@@ -1,0 +1,259 @@
+name: benchmark-weekly
+
+# Full JMH benchmark suite — core micro-benchmarks, propose concurrency
+# sweep (5 payload sizes × 5 thread counts × sync+async), linearizable
+# read under write load. Runs weekly and on manual trigger; too expensive
+# for per-PR CI (~2h on a shared runner).
+
+on:
+  schedule:
+    # Saturday ~03:17 UTC. Off-peak, avoids :00/:30 GH cron spike.
+    - cron: '17 3 * * 6'
+  workflow_dispatch:
+
+concurrency:
+  group: benchmark-weekly
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: JMH Raft Benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Build benchmark uber-jar (skip tests & checks)
+        run: >-
+          mvn -B -ntp package
+          -pl raft-benchmark -am
+          -DskipTests
+          -Dcheckstyle.skip=true
+          -Dpmd.skip=true
+          -Dspotless.check.skip=true
+          -Djacoco.skip=true
+
+      - name: Run core micro-benchmarks
+        run: >-
+          java -jar raft-benchmark/target/raft-benchmark.jar
+          RaftCoreBenchmarks
+          -rf json -rff core-result.json
+          -wi 3 -w 5s -i 5 -r 10s -f 1 -t 1
+
+      - name: Run propose throughput & latency benchmark (concurrency sweep)
+        run: |
+          for t in 1 4 8 16 32; do
+            echo "=== propose -t $t ==="
+            java -jar raft-benchmark/target/raft-benchmark.jar \
+              RaftProposeBenchmark \
+              -rf json -rff "propose-t${t}-result.json" \
+              -wi 3 -w 5s -i 5 -r 10s -f 1 -t "$t"
+          done
+
+      - name: Run linearizable read benchmark
+        run: >-
+          java -jar raft-benchmark/target/raft-benchmark.jar
+          RaftReadBenchmark
+          -rf json -rff read-result.json
+          -wi 3 -w 5s -i 5 -r 10s -f 1 -t 1
+
+      - name: Merge results
+        run: |
+          python3 -c "
+          import json, glob
+          merged = []
+          for f in sorted(glob.glob('*-result.json')):
+              with open(f) as fh:
+                  merged.extend(json.load(fh))
+          with open('benchmark-result.json', 'w') as out:
+              json.dump(merged, out, indent=2)
+          "
+
+      - name: Generate benchmark summary
+        if: always()
+        run: |
+          if [ ! -f benchmark-result.json ]; then
+            echo "No benchmark results found." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          cat <<'PYEOF' > parse_results.py
+          import json
+
+          with open("benchmark-result.json") as f:
+              results = json.load(f)
+
+          def fmt_bytes(s):
+              n = int(s)
+              if n == 0:
+                  return "0B"
+              if n < 1024:
+                  return f"{n}B"
+              return f"{n // 1024}KB"
+
+          # Classify results by benchmark class and mode
+          core = []
+          propose_thrpt = []
+          propose_sample = []
+          read_thrpt = []
+          read_sample = []
+
+          for r in results:
+              b = r["benchmark"]
+              m = r["mode"]
+              if "RaftCoreBenchmarks" in b:
+                  core.append(r)
+              elif "RaftProposeBenchmark" in b:
+                  (propose_thrpt if m == "thrpt" else propose_sample).append(r)
+              elif "RaftReadBenchmark" in b:
+                  (read_thrpt if m == "thrpt" else read_sample).append(r)
+
+          # === Core Micro-Benchmarks ===
+          if core:
+              print("## Core Micro-Benchmarks\n")
+              print("| Benchmark | Voters | Payload | Score | Error (±) | Unit |")
+              print("|-----------|-------:|--------:|------:|----------:|------|")
+              for r in sorted(core, key=lambda x: (
+                  x["benchmark"].split(".")[-1],
+                  int(x.get("params", {}).get("voters", x.get("params", {}).get("voterCount", "0"))),
+                  int(x.get("params", {}).get("payloadBytes", "0"))
+              )):
+                  name = r["benchmark"].split(".")[-1]
+                  p = r.get("params", {})
+                  voters = p.get("voters", p.get("voterCount", "-"))
+                  pb = p.get("payloadBytes", None)
+                  payload = fmt_bytes(pb) if pb else "-"
+                  score = r["primaryMetric"]["score"]
+                  error = r["primaryMetric"]["scoreError"]
+                  unit = r["primaryMetric"].get("scoreUnit", "ops/us")
+                  print(f"| {name} | {voters} | {payload} | {score:,.2f} | ±{error:,.2f} | {unit} |")
+
+          # === Propose Throughput ===
+          if propose_thrpt:
+              print("\n## Propose Throughput\n")
+              print("| Benchmark | Payload | Threads | Ops/ms | Error (±) |")
+              print("|-----------|--------:|--------:|-------:|----------:|")
+              for r in sorted(propose_thrpt, key=lambda x: (
+                  x["benchmark"].split(".")[-1],
+                  x.get("threads", 1),
+                  int(x.get("params", {}).get("payloadSize", "0"))
+              )):
+                  name = r["benchmark"].split(".")[-1]
+                  payload = fmt_bytes(r.get("params", {}).get("payloadSize", "0"))
+                  threads = r.get("threads", 1)
+                  score = r["primaryMetric"]["score"]
+                  error = r["primaryMetric"]["scoreError"]
+                  print(f"| {name} | {payload} | {threads} | {score:,.1f} | ±{error:,.1f} |")
+
+          # === Propose Latency ===
+          if propose_sample:
+              print("\n## Propose Latency Percentiles\n")
+              print("| Payload | Threads | p50 | p90 | p99 | p99.9 | Unit |")
+              print("|--------:|--------:|----:|----:|----:|------:|------|")
+              for r in sorted(propose_sample, key=lambda x: (
+                  x.get("threads", 1),
+                  int(x.get("params", {}).get("payloadSize", "0"))
+              )):
+                  payload = fmt_bytes(r.get("params", {}).get("payloadSize", "0"))
+                  threads = r.get("threads", 1)
+                  pct = r["primaryMetric"].get("scorePercentiles", {})
+                  unit = r["primaryMetric"].get("scoreUnit", "ms/op")
+                  print(f"| {payload} | {threads} | {pct.get('50.0', 0):.3f} | {pct.get('90.0', 0):.3f} | {pct.get('99.0', 0):.3f} | {pct.get('99.9', 0):.3f} | {unit} |")
+
+          # === Read Throughput ===
+          if read_thrpt:
+              print("\n## Read Throughput (under write load)\n")
+              print("| Benchmark | Write QPS | Ops/ms | Error (±) |")
+              print("|-----------|----------:|-------:|----------:|")
+              for r in sorted(read_thrpt, key=lambda x: (
+                  x["benchmark"].split(".")[-1],
+                  int(x.get("params", {}).get("proposeQps", "0"))
+              )):
+                  name = r["benchmark"].split(".")[-1]
+                  qps = r.get("params", {}).get("proposeQps", "0")
+                  score = r["primaryMetric"]["score"]
+                  error = r["primaryMetric"]["scoreError"]
+                  print(f"| {name} | {qps} | {score:,.1f} | ±{error:,.1f} |")
+
+          # === Read Latency ===
+          if read_sample:
+              print("\n## Read Latency Percentiles (under write load)\n")
+              print("| Write QPS | p50 | p90 | p99 | p99.9 | Unit |")
+              print("|----------:|----:|----:|----:|------:|------|")
+              for r in sorted(read_sample, key=lambda x: int(x.get("params", {}).get("proposeQps", "0"))):
+                  qps = r.get("params", {}).get("proposeQps", "0")
+                  pct = r["primaryMetric"].get("scorePercentiles", {})
+                  unit = r["primaryMetric"].get("scoreUnit", "ms/op")
+                  print(f"| {qps} | {pct.get('50.0', 0):.3f} | {pct.get('90.0', 0):.3f} | {pct.get('99.0', 0):.3f} | {pct.get('99.9', 0):.3f} | {unit} |")
+
+          # === Throughput Charts ===
+          if propose_thrpt:
+              print("\n### Propose Throughput Chart\n```")
+              max_s = max(r["primaryMetric"]["score"] for r in propose_thrpt)
+              for r in sorted(propose_thrpt, key=lambda x: (x["benchmark"].split(".")[-1], x.get("threads", 1), int(x.get("params", {}).get("payloadSize", "0")))):
+                  name = r["benchmark"].split(".")[-1]
+                  payload = fmt_bytes(r.get("params", {}).get("payloadSize", "0"))
+                  threads = r.get("threads", 1)
+                  label = f"{name}:{payload}:t{threads}"
+                  score = r["primaryMetric"]["score"]
+                  bar = int(score / max_s * 40) if max_s > 0 else 0
+                  print(f"  {label:>28s} | {'█' * bar} {score:,.0f} ops/ms")
+              print("```")
+
+          if read_thrpt:
+              print("\n### Read Throughput Chart\n```")
+              max_s = max(r["primaryMetric"]["score"] for r in read_thrpt)
+              for r in sorted(read_thrpt, key=lambda x: (x["benchmark"].split(".")[-1], int(x.get("params", {}).get("proposeQps", "0")))):
+                  name = r["benchmark"].split(".")[-1]
+                  qps = r.get("params", {}).get("proposeQps", "0")
+                  label = f"{name}@{qps}qps"
+                  score = r["primaryMetric"]["score"]
+                  bar = int(score / max_s * 40) if max_s > 0 else 0
+                  print(f"  {label:>22s} | {'█' * bar} {score:,.0f} ops/ms")
+              print("```")
+          PYEOF
+
+          python3 parse_results.py >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Ensure gh-pages branch exists
+        run: |
+          if ! git ls-remote --exit-code origin gh-pages > /dev/null 2>&1; then
+            echo "Creating gh-pages branch"
+            git switch --orphan gh-pages
+            git commit --allow-empty -m "Initial gh-pages branch"
+            git push origin gh-pages
+            git switch -
+          fi
+
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Raft KV Benchmark
+          tool: jmh
+          output-file-path: benchmark-result.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          alert-threshold: '150%'
+          comment-on-alert: true
+          fail-on-alert: false
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            benchmark-result.json
+            core-result.json
+            propose-t*-result.json
+            read-result.json
+          retention-days: 30
+          if-no-files-found: ignore

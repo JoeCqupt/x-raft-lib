@@ -273,8 +273,6 @@ public class GrpcTransport implements Transport {
                 Thread.currentThread().interrupt();
             }
         }
-        for (PeerChannel pc : peers.values()) pc.shutdown();
-        peers.clear();
         sendExecutor.shutdown();
         try {
             if (!sendExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
@@ -284,6 +282,8 @@ public class GrpcTransport implements Transport {
             sendExecutor.shutdownNow();
             Thread.currentThread().interrupt();
         }
+        for (PeerChannel pc : peers.values()) pc.shutdown();
+        peers.clear();
     }
 
     /** Per-peer channel + stub. Lazily creates the channel; recreates on shutdown. */
@@ -300,7 +300,7 @@ public class GrpcTransport implements Transport {
         }
 
         synchronized void ensureOpen() {
-            if (channel != null && !channel.isShutdown()) return;
+            if (channel != null) return;
             NettyChannelBuilder builder = NettyChannelBuilder.forTarget(address);
             if (tls != null) {
                 builder.negotiationType(NegotiationType.TLS)

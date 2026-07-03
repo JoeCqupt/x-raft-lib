@@ -108,12 +108,15 @@ class ElectionCycleSoakIntegrationTest {
                     return l != null && l.id != crashedId;
                 }, 20_000)).as("new leader after crashing %d in cycle %d", crashedId, cycle).isTrue();
 
-                // Verify survivors' commit didn't regress.
-                for (TestRaftNode p : nodes) {
-                    assertThat(p.basicStatus().commit)
-                            .as("node %d commit must not regress in cycle %d", p.id, cycle)
-                            .isGreaterThanOrEqualTo(maxCommitSeen - 1);
-                }
+                // Verify survivors converge to the committed level. A node
+                // restarted in a previous cycle may still be catching up via
+                // probe mode, so poll rather than assert a point-in-time snapshot.
+                final long expectedMin = maxCommitSeen - 1;
+                assertThat(awaitTrue(
+                        () -> nodes.stream().allMatch(p -> p.basicStatus().commit >= expectedMin),
+                        15_000))
+                        .as("all survivors must reach commit %d in cycle %d", expectedMin, cycle)
+                        .isTrue();
 
                 // Restart the crashed node with a fresh port.
                 int freshPort = freePorts(1)[0];
