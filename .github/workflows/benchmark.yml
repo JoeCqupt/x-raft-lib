@@ -1,19 +1,25 @@
-name: benchmark
+name: benchmark-weekly
+
+# Full JMH benchmark suite — core micro-benchmarks, propose concurrency
+# sweep (5 payload sizes × 5 thread counts × sync+async), linearizable
+# read under write load. Runs weekly and on manual trigger; too expensive
+# for per-PR CI (~2h on a shared runner).
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  schedule:
+    # Saturday ~03:17 UTC. Off-peak, avoids :00/:30 GH cron spike.
+    - cron: '17 3 * * 6'
   workflow_dispatch:
 
 concurrency:
-  group: benchmark-${{ github.ref }}
+  group: benchmark-weekly
   cancel-in-progress: true
 
 jobs:
   benchmark:
     name: JMH Raft Benchmark
     runs-on: ubuntu-latest
+    timeout-minutes: 180
 
     steps:
       - uses: actions/checkout@v4
@@ -218,7 +224,6 @@ jobs:
           python3 parse_results.py >> "$GITHUB_STEP_SUMMARY"
 
       - name: Ensure gh-pages branch exists
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
           if ! git ls-remote --exit-code origin gh-pages > /dev/null 2>&1; then
             echo "Creating gh-pages branch"
@@ -228,8 +233,7 @@ jobs:
             git switch -
           fi
 
-      - name: Store benchmark result (main only)
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: Raft KV Benchmark
@@ -239,19 +243,6 @@ jobs:
           auto-push: true
           alert-threshold: '150%'
           comment-on-alert: true
-          fail-on-alert: false
-
-      - name: Comment benchmark on PR
-        if: github.event_name == 'pull_request'
-        uses: benchmark-action/github-action-benchmark@v1
-        with:
-          name: Raft KV Benchmark
-          tool: jmh
-          output-file-path: benchmark-result.json
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: false
-          comment-on-alert: true
-          alert-threshold: '150%'
           fail-on-alert: false
 
       - name: Upload benchmark results
