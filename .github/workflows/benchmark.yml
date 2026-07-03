@@ -42,12 +42,15 @@ jobs:
           -rf json -rff core-result.json
           -wi 3 -w 5s -i 5 -r 10s -f 1 -t 1
 
-      - name: Run propose throughput & latency benchmark
-        run: >-
-          java -jar raft-benchmark/target/raft-benchmark.jar
-          RaftProposeBenchmark
-          -rf json -rff propose-result.json
-          -wi 3 -w 5s -i 5 -r 10s -f 1 -t 1
+      - name: Run propose throughput & latency benchmark (concurrency sweep)
+        run: |
+          for t in 1 4 8 16 32; do
+            echo "=== propose -t $t ==="
+            java -jar raft-benchmark/target/raft-benchmark.jar \
+              RaftProposeBenchmark \
+              -rf json -rff "propose-t${t}-result.json" \
+              -wi 3 -w 5s -i 5 -r 10s -f 1 -t "$t"
+          done
 
       - name: Run linearizable read benchmark
         run: >-
@@ -130,28 +133,34 @@ jobs:
           # === Propose Throughput ===
           if propose_thrpt:
               print("\n## Propose Throughput\n")
-              print("| Benchmark | Payload | Ops/ms | Error (±) |")
-              print("|-----------|--------:|-------:|----------:|")
+              print("| Benchmark | Payload | Threads | Ops/ms | Error (±) |")
+              print("|-----------|--------:|--------:|-------:|----------:|")
               for r in sorted(propose_thrpt, key=lambda x: (
                   x["benchmark"].split(".")[-1],
+                  x.get("threads", 1),
                   int(x.get("params", {}).get("payloadSize", "0"))
               )):
                   name = r["benchmark"].split(".")[-1]
                   payload = fmt_bytes(r.get("params", {}).get("payloadSize", "0"))
+                  threads = r.get("threads", 1)
                   score = r["primaryMetric"]["score"]
                   error = r["primaryMetric"]["scoreError"]
-                  print(f"| {name} | {payload} | {score:,.1f} | ±{error:,.1f} |")
+                  print(f"| {name} | {payload} | {threads} | {score:,.1f} | ±{error:,.1f} |")
 
           # === Propose Latency ===
           if propose_sample:
               print("\n## Propose Latency Percentiles\n")
-              print("| Payload | p50 | p90 | p99 | p99.9 | Unit |")
-              print("|--------:|----:|----:|----:|------:|------|")
-              for r in sorted(propose_sample, key=lambda x: int(x.get("params", {}).get("payloadSize", "0"))):
+              print("| Payload | Threads | p50 | p90 | p99 | p99.9 | Unit |")
+              print("|--------:|--------:|----:|----:|----:|------:|------|")
+              for r in sorted(propose_sample, key=lambda x: (
+                  x.get("threads", 1),
+                  int(x.get("params", {}).get("payloadSize", "0"))
+              )):
                   payload = fmt_bytes(r.get("params", {}).get("payloadSize", "0"))
+                  threads = r.get("threads", 1)
                   pct = r["primaryMetric"].get("scorePercentiles", {})
                   unit = r["primaryMetric"].get("scoreUnit", "ms/op")
-                  print(f"| {payload} | {pct.get('50.0', 0):.3f} | {pct.get('90.0', 0):.3f} | {pct.get('99.0', 0):.3f} | {pct.get('99.9', 0):.3f} | {unit} |")
+                  print(f"| {payload} | {threads} | {pct.get('50.0', 0):.3f} | {pct.get('90.0', 0):.3f} | {pct.get('99.0', 0):.3f} | {pct.get('99.9', 0):.3f} | {unit} |")
 
           # === Read Throughput ===
           if read_thrpt:
@@ -183,13 +192,14 @@ jobs:
           if propose_thrpt:
               print("\n### Propose Throughput Chart\n```")
               max_s = max(r["primaryMetric"]["score"] for r in propose_thrpt)
-              for r in sorted(propose_thrpt, key=lambda x: (x["benchmark"].split(".")[-1], int(x.get("params", {}).get("payloadSize", "0")))):
+              for r in sorted(propose_thrpt, key=lambda x: (x["benchmark"].split(".")[-1], x.get("threads", 1), int(x.get("params", {}).get("payloadSize", "0")))):
                   name = r["benchmark"].split(".")[-1]
                   payload = fmt_bytes(r.get("params", {}).get("payloadSize", "0"))
-                  label = f"{name}:{payload}"
+                  threads = r.get("threads", 1)
+                  label = f"{name}:{payload}:t{threads}"
                   score = r["primaryMetric"]["score"]
                   bar = int(score / max_s * 40) if max_s > 0 else 0
-                  print(f"  {label:>22s} | {'█' * bar} {score:,.0f} ops/ms")
+                  print(f"  {label:>28s} | {'█' * bar} {score:,.0f} ops/ms")
               print("```")
 
           if read_thrpt:
@@ -252,7 +262,7 @@ jobs:
           path: |
             benchmark-result.json
             core-result.json
-            propose-result.json
+            propose-t*-result.json
             read-result.json
           retention-days: 30
           if-no-files-found: ignore

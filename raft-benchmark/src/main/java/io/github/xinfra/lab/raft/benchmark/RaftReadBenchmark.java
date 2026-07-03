@@ -6,7 +6,6 @@
  */
 package io.github.xinfra.lab.raft.benchmark;
 
-import io.github.xinfra.lab.raft.RaftStateType;
 import io.github.xinfra.lab.raft.examples.KvServer;
 import io.github.xinfra.lab.raft.examples.proto.KvCommand;
 import org.openjdk.jmh.annotations.AuxCounters;
