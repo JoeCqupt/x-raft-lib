@@ -43,73 +43,77 @@ import java.util.concurrent.TimeUnit;
 @Warmup(iterations = 3, time = 2)
 @Measurement(iterations = 5, time = 3)
 @Fork(value = 1)
-@State(Scope.Benchmark)
 public class RaftCoreBenchmarks {
 
-    @Param({"3", "5"})
-    public int voters;
+    // ============= Propose/Drain state (voters × payloadBytes) =============
 
-    @Param({"0", "128", "1024", "4096", "65536"})
-    public int payloadBytes;
+    @State(Scope.Benchmark)
+    public static class ProposeDrainState {
+        @Param({"3", "5"})
+        public int voters;
 
-    private RawNode rn;
-    private MemoryStorage storage;
-    private byte[] payload;
+        @Param({"0", "128", "1024", "4096", "65536"})
+        public int payloadBytes;
 
-    @Setup(Level.Iteration)
-    public void setUp() throws RaftException {
-        storage = new MemoryStorage();
-        Eraftpb.SnapshotMetadata.Builder mb = storage.getSnapshot().getMetadata().toBuilder();
-        Eraftpb.ConfState.Builder cb = mb.getConfState().toBuilder();
-        for (long i = 1; i <= voters; i++) cb.addVoters(i);
-        mb.setConfState(cb);
-        storage.setSnapshot(storage.getSnapshot().toBuilder().setMetadata(mb).build());
+        RawNode rn;
+        MemoryStorage storage;
+        byte[] payload;
 
-        Config cfg = Config.builder()
-                .id(1)
-                .electionTick(10)
-                .heartbeatTick(1)
-                .storage(storage)
-                .maxSizePerMsg(Long.MAX_VALUE)
-                .maxInflightMsgs(1024)
-                .build();
+        @Setup(Level.Iteration)
+        public void setUp() throws RaftException {
+            storage = new MemoryStorage();
+            Eraftpb.SnapshotMetadata.Builder mb = storage.getSnapshot().getMetadata().toBuilder();
+            Eraftpb.ConfState.Builder cb = mb.getConfState().toBuilder();
+            for (long i = 1; i <= voters; i++) cb.addVoters(i);
+            mb.setConfState(cb);
+            storage.setSnapshot(storage.getSnapshot().toBuilder().setMetadata(mb).build());
 
-        rn = RawNode.newRawNode(cfg);
-        rn.campaign();
-        while (rn.hasReady()) {
-            Ready rd = rn.ready();
-            if (!rd.entries().isEmpty()) storage.append(rd.entries());
-            rn.advance(rd);
+            Config cfg = Config.builder()
+                    .id(1)
+                    .electionTick(10)
+                    .heartbeatTick(1)
+                    .storage(storage)
+                    .maxSizePerMsg(Long.MAX_VALUE)
+                    .maxInflightMsgs(1024)
+                    .build();
+
+            rn = RawNode.newRawNode(cfg);
+            rn.campaign();
+            while (rn.hasReady()) {
+                Ready rd = rn.ready();
+                if (!rd.entries().isEmpty()) storage.append(rd.entries());
+                rn.advance(rd);
+            }
+
+            payload = new byte[payloadBytes];
+            Arrays.fill(payload, (byte) 'a');
         }
 
-        payload = new byte[payloadBytes];
-        Arrays.fill(payload, (byte) 'a');
-    }
-
-    @TearDown(Level.Iteration)
-    public void tearDown() {
-        rn = null;
-        storage = null;
+        @TearDown(Level.Iteration)
+        public void tearDown() {
+            rn = null;
+            storage = null;
+        }
     }
 
     @Benchmark
-    public Ready proposeAndDrain() throws RaftException {
-        rn.propose(payload);
-        Ready rd = rn.ready();
-        if (!rd.entries().isEmpty()) storage.append(rd.entries());
-        rn.advance(rd);
+    public Ready proposeAndDrain(ProposeDrainState st) throws RaftException {
+        st.rn.propose(st.payload);
+        Ready rd = st.rn.ready();
+        if (!rd.entries().isEmpty()) st.storage.append(rd.entries());
+        st.rn.advance(rd);
         return rd;
     }
 
     @Benchmark
-    public void leaderHandleAppendResponse() throws RaftException {
-        long lastIndex = rn.raft.raftLog().lastIndex();
-        for (long peerId = 2; peerId <= voters; peerId++) {
-            rn.step(Eraftpb.Message.newBuilder()
+    public void leaderHandleAppendResponse(ProposeDrainState st) throws RaftException {
+        long lastIndex = st.rn.raft.raftLog().lastIndex();
+        for (long peerId = 2; peerId <= st.voters; peerId++) {
+            st.rn.step(Eraftpb.Message.newBuilder()
                     .setMsgType(Eraftpb.MessageType.MsgAppendResponse)
                     .setFrom(peerId)
                     .setTo(1)
-                    .setTerm(rn.raft.term())
+                    .setTerm(st.rn.raft.term())
                     .setIndex(lastIndex)
                     .build());
         }
