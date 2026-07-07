@@ -434,22 +434,12 @@ public class RaftKVNode implements AutoCloseable {
     }
 
     private void checkSelfRemoval(Eraftpb.ConfChangeV2 cc, Eraftpb.ConfState cs) {
-        boolean removingSelf = false;
-        for (Eraftpb.ConfChangeSingle change : cc.getChangesList()) {
-            if (change.getNodeId() == id
-                    && change.getType() == Eraftpb.ConfChangeType.ConfChangeRemoveNode) {
-                removingSelf = true;
-                break;
-            }
-        }
-        if (!removingSelf) return;
-
         if (!cs.getVotersList().contains(id)
                 && !cs.getLearnersList().contains(id)
                 && !cs.getVotersOutgoingList().contains(id)) {
             LOG.info("node {} removed from cluster, shutting down", id);
             removedFuture.complete(null);
-            running = false;
+            close();
         }
     }
 
