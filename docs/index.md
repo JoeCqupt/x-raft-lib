@@ -15,6 +15,7 @@ A faithful Java port of [etcd-io/raft](https://github.com/etcd-io/raft) — a pu
 | Document | Description |
 |----------|-------------|
 | [Architecture & Design](architecture.md) | Design philosophy, module structure, core internals, Storage & Transport interfaces |
+| [Raft / RawNode / Node Layers](raft-node-layers.md) | Three-layer API architecture, Ready lifecycle, event loop internals, usage modes |
 | [Getting Started](getting-started.md) | Prerequisites, run the KV demo, embed in your application, configuration reference |
 | [Testing Strategy](testing.md) | Test pyramid, unit / property / fuzz / integration / chaos / soak / linearizability |
 | [CI/CD & Quality Gates](ci.md) | CI pipeline, fuzz nightly, chaos soak weekly, release process |
