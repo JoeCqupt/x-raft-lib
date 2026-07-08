@@ -52,6 +52,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -546,18 +547,12 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             writeLock.unlock();
         }
 
-        // Phase 2: file I/O outside the lock (unique file name per index/term).
+        // Phase 2: file I/O outside the lock. Each writer uses its OWN uniquely
+        // named temp file, so concurrent writers for the same (index,term) can
+        // never share/truncate one another's temp file.
         String fileName = sidecarName(i, term);
         Path finalPath = snapDir.resolve(fileName);
-        Path tmpPath = snapDir.resolve(fileName + ".tmp");
-        try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
-                tmpPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))) {
-            writer.writeTo(out);
-            out.flush();
-        }
-        fsyncFile(tmpPath);
-        Files.move(tmpPath, finalPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        fsyncDir(snapDir);
+        writeSidecarAtomically(finalPath, writer);
 
         // Phase 3: persist metadata under write lock (short critical section).
         Eraftpb.SnapshotMetadata.Builder mb = Eraftpb.SnapshotMetadata.newBuilder()
@@ -608,18 +603,10 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             writeLock.unlock();
         }
 
-        // Phase 2: file I/O outside the lock.
+        // Phase 2: file I/O outside the lock (own unique temp file per writer).
         String fileName = sidecarName(idx, term);
         Path finalPath = snapDir.resolve(fileName);
-        Path tmpPath = snapDir.resolve(fileName + ".tmp");
-        try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
-                tmpPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))) {
-            data.transferTo(out);
-            out.flush();
-        }
-        fsyncFile(tmpPath);
-        Files.move(tmpPath, finalPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        fsyncDir(snapDir);
+        writeSidecarAtomically(finalPath, data::transferTo);
 
         // Phase 3: persist metadata + truncate log under write lock.
         Eraftpb.Snapshot metaOnly = meta.toBuilder().clearData().build();
@@ -685,18 +672,11 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             readLock.unlock();
         }
 
-        // File I/O outside the lock.
+        // File I/O outside the lock (own unique temp file per writer, so two
+        // concurrent installs of the same (index,term) can't corrupt one temp).
         String fileName = sidecarName(idx, term);
         Path finalPath = snapDir.resolve(fileName);
-        Path tmpPath = snapDir.resolve(fileName + ".tmp");
-        try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
-                tmpPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))) {
-            data.transferTo(out);
-            out.flush();
-        }
-        fsyncFile(tmpPath);
-        Files.move(tmpPath, finalPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        fsyncDir(snapDir);
+        writeSidecarAtomically(finalPath, data::transferTo);
     }
 
     @Override
@@ -763,6 +743,39 @@ public class RocksDbStorage implements Storage, AutoCloseable {
         return "snap-" + index + "-" + term + ".data";
     }
 
+    /**
+     * Write a side-car payload to {@code finalPath} crash-safely AND race-safely.
+     * Each call writes to its OWN uniquely-named temp file
+     * ({@code <name>.tmp.<random>}) so that two concurrent writers targeting the
+     * same {@code (index,term)} — e.g. a retried / duplicated snapshot install —
+     * never share or truncate one another's temp file. The temp is fsync'd, then
+     * atomically renamed onto {@code finalPath} (last writer wins; since the
+     * payload for a given (index,term) is identical, the bytes are the same),
+     * and finally the directory is fsync'd. On any failure the writer's own temp
+     * file is removed so no orphan {@code .tmp.*} lingers.
+     */
+    private void writeSidecarAtomically(Path finalPath, SnapshotDataWriter writer) throws IOException {
+        Path tmpPath = snapDir.resolve(finalPath.getFileName().toString()
+                + ".tmp." + Long.toUnsignedString(ThreadLocalRandom.current().nextLong()));
+        try {
+            try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
+                    tmpPath, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE))) {
+                writer.writeTo(out);
+                out.flush();
+            }
+            fsyncFile(tmpPath);
+            Files.move(tmpPath, finalPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            fsyncDir(snapDir);
+        } catch (IOException | RuntimeException e) {
+            try {
+                Files.deleteIfExists(tmpPath);
+            } catch (IOException ignored) {
+                // best-effort cleanup of our own temp file
+            }
+            throw e;
+        }
+    }
+
     private static void fsyncFile(Path p) throws IOException {
         try (FileChannel ch = FileChannel.open(p, StandardOpenOption.WRITE)) {
             ch.force(true);
@@ -780,7 +793,7 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     }
 
     private static void cleanupTempSnapshotFiles(Path dir) {
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir, "*.tmp")) {
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir, "*.tmp*")) {
             for (Path p : ds) {
                 try { Files.deleteIfExists(p); } catch (IOException ignored) { /* best-effort */ }
             }
