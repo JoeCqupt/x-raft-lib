@@ -52,6 +52,10 @@
   - [Q31: side-car 临时文件不怕重名吗？存在并发竞态吗？](#q31-side-car-临时文件不怕重名吗存在并发竞态吗)
   - [Q32: `applySnapshot` 什么时候使用？为何代码里没看到调用？](#q32-applysnapshot-什么时候使用为何代码里没看到调用)
   - [Q33: `createSnapshot` 和 `applySnapshot` 的使用方式是什么？只有 Leader 创建快照、只有 Follower 安装快照吗？](#q33-createsnapshot-和-applysnapshot-的使用方式是什么只有-leader-创建快照只有-follower-安装快照吗)
+- [十二、快照后的 Progress 恢复](#十二快照后的-progress-恢复)
+  - [Q34: Follower apply snapshot 后 Leader 侧 Progress 如何回到复制状态？](#q34-follower-apply-snapshot-后-leader-侧-progress-如何回到复制状态)
+  - [Q35: Follower 回复的 `MsgAppendResponse` 丢失或超时会永远回不来吗？](#q35-follower-回复的-msgappendresponse-丢失或超时会永远回不来吗)
+  - [Q36: 上述 Progress 恢复行为与 etcd-raft 一致吗？](#q36-上述-progress-恢复行为与-etcd-raft-一致吗)
 
 ---
 
@@ -1049,6 +1053,160 @@ Follower 收到 MsgSnapshot → SnapshotSink.install → stageSnapshotData（只
 **一句话总结：** `createSnapshot` 所有节点都调（本地打快照）；`applySnapshot` 生产不调，被 `writeBatched` 替代，但"安装快照"这个动作确实只发生在 Follower 侧。
 
 **源码位置：** `RaftKVNode.maybeSnapshot()` / `RaftKVNode.processReady()` / `RocksDbStorage.writeBatched()` / `Raft.handleSnapshot()`
+
+---
+
+## 十二、快照后的 Progress 恢复
+
+> 承接第十章，聚焦「Follower 装完快照后，Leader 侧 Progress 如何从 `StateSnapshot` 回到 `StateReplicate`」，以及消息丢失下的可靠性保证。
+
+### Q34: Follower apply snapshot 后 Leader 侧 Progress 如何回到复制状态？
+
+整体状态流转：
+
+```
+StateReplicate ──(日志被 compact，append 发不出去)──> StateSnapshot
+              ──(收到 Follower 的 MsgAppendResponse)──> StateProbe ──> StateReplicate
+```
+
+**① Leader 进入 StateSnapshot（起点）**
+
+当 Leader 发现无法用日志追平 Follower（entry 已被 compact），`maybeSendSnapshot` 调用 `pr.becomeSnapshot(sindex)`：
+
+```java
+pr.becomeSnapshot(sindex);  // state=StateSnapshot, pendingSnapshot=sindex, next=sindex+1
+```
+
+此时 `Progress.isPaused()` 对 `StateSnapshot` **恒为 true**，Leader 暂停向该 Follower 发送任何 append，静等结果。
+
+**② Follower 应用快照并回 ACK**
+
+Follower 在 `handleSnapshot()` 中 `restore(s)` 成功后，回一个**接受型 MsgAppendResponse**，index 是应用快照后的 lastIndex（即 snapshot 的 index）：
+
+```java
+send(appendRespAccept(m.getFrom(), raftLog.lastIndex()));
+```
+
+**③ Leader 收到 AppResp，从 StateSnapshot 恢复（关键路径）**
+
+在 `stepLeader` 的 `MsgAppendResponse` 非拒绝分支，先 `pr.maybeUpdate(m.getIndex())` 把 `match` 推进到 snapshot index，随后命中 `StateSnapshot` 分支：
+
+```java
+case StateSnapshot:
+    if (pr.getMatch() + 1 >= r.raftLog.firstIndex()) {
+        pr.becomeProbe();       // 先退回 Probe，清掉 pendingSnapshot
+        pr.becomeReplicate();   // 再进入 Replicate，next = match + 1
+    }
+    break;
+```
+
+- 判断条件 `pr.getMatch() + 1 >= r.raftLog.firstIndex()`：确认 Follower 通过快照追平后，其后续所需日志（`match+1`）仍在 Leader 当前日志范围内（没有再次被 compact 掉），才能继续用 append 复制。
+- `becomeReplicate()` 把 `next = match + 1`，并通过 `resetState` 清空 inflights、`pendingSnapshot=0`、`msgAppFlowPaused=false`。
+
+至此 Progress 回到 `StateReplicate`，`isPaused()` 变回 false，Leader 恢复正常 append 复制。
+
+**辅助路径：MsgSnapStatus（快照传输结果上报）**
+
+宿主通过 `node.reportSnapshot(id, status)` 上报快照发送结果，翻译为 `MsgSnapStatus`：
+
+```java
+case MsgSnapStatus:
+    if (pr.getState() != StateType.StateSnapshot) return;
+    if (!m.getReject()) { pr.becomeProbe(); ... }        // 成功：退回 Probe
+    else { pr.setPendingSnapshot(0); pr.becomeProbe(); }  // 失败：清 pendingSnapshot 后退回 Probe
+    pr.setMsgAppFlowPaused(true);
+```
+
+这条路径**只回到 `StateProbe`**，之后 Leader 发一次探测 append，Follower 回 AppResp，再命中 `MsgAppendResponse` 的 `StateProbe` 分支 `becomeReplicate()` 完成最终转换。
+
+**源码位置：** `Raft.maybeSendSnapshot()` / `Raft.handleSnapshot()` / `Raft.stepLeader()` → `MsgAppendResponse` / `Progress.becomeSnapshot()` / `Progress.becomeProbe()` / `Progress.becomeReplicate()`
+
+---
+
+### Q35: Follower 回复的 `MsgAppendResponse` 丢失或超时会永远回不来吗？
+
+**不会。** 因为 raft 的恢复并不押在 Q34 步骤③那条一次性的 AppResp 上，真正的恢复驱动是两个可重试 / 被保证送达的机制。
+
+**关键前提：StateSnapshot 下 append 被完全暂停**
+
+`StateSnapshot` 的 `isPaused()` **恒为 true**，而 `maybeSendAppend` 第一行就 `if (pr.isPaused()) return false`。所以只要 Progress 卡在 `StateSnapshot`，即使心跳照发、心跳响应照回，Leader 也**不会**发 append。因此设计上**绝不允许 Progress 无限期停在 StateSnapshot**。
+
+**防线一：MsgSnapStatus 强制把状态拨出 StateSnapshot（主机制）**
+
+发送快照是宿主（传输层）的职责，无论**成功、失败还是超时**，都必须回调 `node.reportSnapshot`，它翻译成 `MsgSnapStatus`——无论成功失败都 `becomeProbe()`，把 Progress 从 `StateSnapshot` 拨到 `StateProbe`，**一旦进入 Probe，`isPaused` 不再恒 true，卡死条件解除**。
+
+> ⚠️ **重要：`reportSnapshot` 需要 inline 与 streaming 两条发送路径都调用。** `RaftKVNode` 示例把快照发送分为两条路（见 [Q27](#q27-leader-何时如何发送快照)），两者**都**必须上报：
+>
+> | 发送模式 | 发送方法 | 完成上报 |
+> |---------|---------|---------|
+> | **streaming**（带外流式，大快照）| `sendSnapshotOutOfBand` → `transport.sendSnapshot(..., cb)` | `cb` 回调里 `reportSnapshot(Finish/Failure)` |
+> | **inline**（payload 内联在 proto，小快照）| `sendSnapshotInline` → `transport.send` | 发送后 `reportSnapshot(Finish)`；异常 `Failure` |
+>
+> **历史坎（已修复）：** 早期 `RaftKVNode` 的 inline 分支直接走普通 `transport.send`，**漏接了 `reportSnapshot`**。若此时 `MsgSnapshot` 因连接中断而丢失，Leader 会卡在 `StateSnapshot`（`MsgUnreachable` 在 `StateSnapshot` 下是 no-op，救不了）。修复后 inline 也走带完成上报的 `sendSnapshotInline`；transport.send 是 fire-and-forget，“成功”仅表示“已提交”，若实际未送达，Progress 进 `StateProbe` 后探测 append 会被 reject，触发 Leader 重发快照，形成自愈闭环。
+
+本库还特意防止 `MsgSnapStatus` 本身丢失——`DefaultNode.reportSnapshot` 用**阻塞入队**（`events.put`）而非 `offer` 丢弃，注释写得很直白：
+
+```java
+// Block until accepted; dropping a SnapshotFailure would leave the
+// leader stuck in StateSnapshot for that follower.
+```
+
+**防线二：心跳 + 探测 append 重新追平（不依赖丢失的 AppResp）**
+
+进入 `StateProbe` 后，恢复不再需要那条已丢失的 AppResp。Leader 周期性 `bcastHeartbeat`（心跳发送**不**受 isPaused 限制），Follower 回 `MsgHeartbeatResponse`：
+
+```java
+case MsgHeartbeatResponse:
+    pr.setRecentActive(true);
+    pr.setMsgAppFlowPaused(false);   // 解除 Probe 的暂停
+    if (pr.getMatch() < r.raftLog.lastIndex() || pr.getState() == StateType.StateProbe) {
+        r.sendAppend(m.getFrom());   // Probe 下 isPaused=false，探测 append 真的发出去了
+    }
+```
+
+这条路径是**周期性重试**的——心跳每个 `heartbeatTimeout` 一次，探测 append 可反复发，任何一次往返成功即追平，不依赖某条特定消息不丢。
+
+**场景汇总：**
+
+| 场景 | 结果 |
+|------|------|
+| AppResp 丢失，但传输层上报了 MsgSnapStatus | Progress → Probe，靠心跳+探测 append 反复重试追平，**能回来** |
+| 快照传输超时/失败（Ack 丢失） | 上报 SnapshotFailure → `pendingSnapshot=0` + Probe，后续可重新探测甚至重发快照，**能回来** |
+| inline 快照 `MsgSnapshot` 丢失 | `sendSnapshotInline` 已上报→ Probe，探测 append 被 reject → Leader 重发快照，**能回来**（修复前会卡死） |
+| 假如 MsgSnapStatus 也丢了（本库不允许） | 才会真卡在 StateSnapshot —— 所以本库用阻塞入队保证它绝不丢 |
+
+**一句话总结：** 恢复的真正驱动是 **MsgSnapStatus（强制退出 StateSnapshot）+ 周期性心跳探测（反复重试的 append）**，步骤③的 AppResp 只是「最快路径」，丢了顶多慢一个心跳周期，不会永久卡死。前提是宿主在 inline 与 streaming 两条发送路径上**都**调用了 `reportSnapshot`。
+
+**源码位置：** `Progress.isPaused()` / `Raft.maybeSendAppend()` / `Raft.stepLeader()` → `MsgHeartbeatResponse` / `MsgSnapStatus` / `DefaultNode.reportSnapshot()` / `RaftKVNode.sendSnapshotInline()` / `RaftKVNode.sendSnapshotOutOfBand()`
+
+---
+
+### Q36: 上述 Progress 恢复行为与 etcd-raft 一致吗？
+
+**完全一致。** 本库是 etcd-raft 的忠实 Java 端口，这一块逐条对齐 etcd 源码。
+
+| 行为 | etcd-raft | 本库 | 是否一致 |
+|------|-----------|------|:-:|
+| `StateSnapshot` 恒暂停 | `IsPaused()` 中 `case StateSnapshot: return true` | `Progress.isPaused()` 同逻辑 | ✅ |
+| `MsgSnapStatus` 处理 | 成功 `BecomeProbe()`；失败 `PendingSnapshot=0` 后 `BecomeProbe()`；末尾 `MsgAppFlowPaused=true` | `stepLeader` → `MsgSnapStatus` 同逻辑（含 `pendingSnapshot=0` 的先后顺序）| ✅ |
+| 心跳响应驱动探测 | `MsgHeartbeatResp` 清 `MsgAppFlowPaused` 后按 `Match<lastIndex \|\| StateProbe` 触发 `sendAppend` | `stepLeader` → `MsgHeartbeatResponse` 同逻辑 | ✅ |
+| `ReportSnapshot` → `MsgSnapStatus` | `node.go` 阻塞入 `recvc`（无 default 的 select）| `DefaultNode.reportSnapshot` 用 `events.put` 阻塞入队 | ✅ |
+
+**etcd 官方注释就是这么规定的。** etcd `raft.go` 中 `ReportSnapshot` 的文档注释几乎就是在回答 Q35：
+
+> When leader sends a snapshot to a follower, it **pauses any raft log probes** until the follower can apply the snapshot... If the follower can't do that, e.g., due to a crash, it could end up in a **limbo, never getting any updates from the leader**. Therefore, it is crucial that the application ensures that any failure in snapshot sending is caught and **reported back to the leader** with `SnapshotFailure`; so it can resume raft log probing.
+
+即：
+
+1. 「停在 StateSnapshot 会陷入 limbo」是 etcd **有意的设计约束**，不是缺陷；
+2. etcd 把「保证上报 `ReportSnapshot`」明确规定为**应用层（传输层）的责任**；
+3. 本库不但遵循该约定，还通过阻塞入队 + 两条发送路径（inline 的 `sendSnapshotInline` 与 streaming 的 `sendSnapshotOutOfBand`）**都**调 `reportSnapshot`，帮宿主把这个责任落地了。
+
+> 💡 **与 etcd 的细微差异：** etcd 的 rafthttp 对 `MsgSnap`（无论快照大小）一律走专门的 snapshotSender，发送结束无条件调 `ReportSnapshot`，**不存在“不带 reportSnapshot 的快照发送路径”**。本库把快照分为 inline / streaming 两条路，因此必须确保**两条路都**调 `reportSnapshot`（早期 inline 分支曾漏接，已修复）。
+
+**对自定义 Transport 的要求（与 etcd 相同）：** 你的传输层在 snapshot 发送成功或失败时都**必须**调用 `reportSnapshot`，且 inline、streaming 每一条发送路径都不能遗漏。本库自带的 gRPC 传输 + `RaftKVNode` 示例已在两条路上都落地；使用自定义 `Transport` 时照此约定实现即可。
+
+**源码位置：** `Progress.isPaused()` / `Raft.stepLeader()` / `DefaultNode.reportSnapshot()`（对比 etcd `raft.go` / `node.go`）
 
 ---
 

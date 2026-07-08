@@ -117,6 +117,13 @@ public class RaftKVNode implements AutoCloseable {
             catch (RaftException e) { /* best-effort */ }
         });
 
+        // When the transport observes a peer as unreachable (RPC failure,
+        // timeout, channel closed), tell the leader so it drops that follower
+        // out of StateReplicate into StateProbe immediately, instead of burning
+        // the inflight window streaming appends to a dead connection until the
+        // next heartbeat timeout.
+        transport.setUnreachableListener(node::reportUnreachable);
+
         this.snapshotStreaming =
                 storage.supportsStreamingSnapshot() && transport.supportsSnapshotStreaming();
         if (snapshotStreaming) {
@@ -303,8 +310,12 @@ public class RaftKVNode implements AutoCloseable {
         if (rd.messages() != null) {
             for (Eraftpb.Message m : rd.messages()) {
                 if (m.getTo() == id) continue;
-                if (snapshotStreaming && m.getMsgType() == Eraftpb.MessageType.MsgSnapshot) {
-                    sendSnapshotOutOfBand(m);
+                if (m.getMsgType() == Eraftpb.MessageType.MsgSnapshot) {
+                    if (snapshotStreaming) {
+                        sendSnapshotOutOfBand(m);
+                    } else {
+                        sendSnapshotInline(m);
+                    }
                 } else {
                     transport.send(m.getTo(), m);
                 }
@@ -533,6 +544,34 @@ public class RaftKVNode implements AutoCloseable {
             }
             node.reportSnapshot(to, ok ? SnapshotStatus.SnapshotFinish : SnapshotStatus.SnapshotFailure);
         });
+    }
+
+    /**
+     * Inline snapshot send with completion reporting. The payload already sits
+     * inside {@code m}'s snapshot data, so it goes over the normal (reliable)
+     * {@code transport.send} channel. Unlike a plain message send, we always
+     * report the outcome back to the core so the leader's Progress leaves
+     * {@code StateSnapshot}: without this, a {@code MsgSnapshot} lost on a
+     * broken connection would strand the follower in {@code StateSnapshot}
+     * indefinitely (heartbeat-driven appends stay paused there).
+     *
+     * <p>{@code transport.send} is fire-and-forget, so success here means
+     * "submitted", not "delivered": if the snapshot never arrives, the follower
+     * stays behind, the subsequent probe append is rejected, and the leader
+     * re-sends the snapshot — a self-healing loop. On a submit-time exception we
+     * report {@link SnapshotStatus#SnapshotFailure} so the leader retries after
+     * a heartbeat interval.
+     */
+    private void sendSnapshotInline(Eraftpb.Message m) {
+        long to = m.getTo();
+        boolean ok = true;
+        try {
+            transport.send(to, m);
+        } catch (RuntimeException e) {
+            ok = false;
+            LOG.warn("inline snapshot send to {} failed: {}", to, e.toString());
+        }
+        node.reportSnapshot(to, ok ? SnapshotStatus.SnapshotFinish : SnapshotStatus.SnapshotFailure);
     }
 
     private void drainPendingFutures() {
