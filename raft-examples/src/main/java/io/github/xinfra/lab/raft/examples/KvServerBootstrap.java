@@ -35,6 +35,8 @@ public final class KvServerBootstrap {
         String dataDir = null;
         String peersStr = null;
         boolean bootstrap = false;
+        boolean snapshotStreaming = false;
+        boolean asyncStorageWrites = false;
 
         for (String arg : args) {
             if (arg.startsWith("--id=")) {
@@ -49,17 +51,21 @@ public final class KvServerBootstrap {
                 peersStr = arg.substring(8);
             } else if (arg.equals("--bootstrap")) {
                 bootstrap = true;
+            } else if (arg.equals("--snapshot-streaming")) {
+                snapshotStreaming = true;
+            } else if (arg.equals("--async-storage-writes")) {
+                asyncStorageWrites = true;
             }
         }
 
         if (id == 0 || raftPort == 0 || kvPort == 0 || dataDir == null || peersStr == null) {
-            System.err.println("Usage: --id=<N> --raft-port=<P> --kv-port=<P> --data-dir=<DIR> --peers=<ID=HOST:PORT,...> [--bootstrap]");
+            System.err.println("Usage: --id=<N> --raft-port=<P> --kv-port=<P> --data-dir=<DIR> --peers=<ID=HOST:PORT,...> [--bootstrap] [--snapshot-streaming] [--async-storage-writes]");
             System.exit(1);
         }
 
         Map<Long, String> peers = parsePeers(peersStr);
 
-        KvServer server = new KvServer(id, raftPort, kvPort, Path.of(dataDir), peers, bootstrap);
+        KvServer server = new KvServer(id, raftPort, kvPort, Path.of(dataDir), peers, bootstrap, snapshotStreaming, asyncStorageWrites);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             LOG.info("shutting down KvServer node {}", server.status().id);
             server.close();

@@ -50,21 +50,30 @@ Happens at the end of `RaftKVNode.processReady()`:
 flowchart TD
     A["readyLoop"] --> B["node.ready() drains a Ready"]
     B --> C["storage.writeBatched(entries, hardState, snapshot) persist"]
-    C --> D["send rd.messages()"]
-    D --> E["apply committedEntries to state machine"]
-    E --> F["track highestApplied, storage.setApplied()"]
+    C --> D{"asyncStorageWrites?"}
+    D -- no --> E1["send rd.messages()"]
+    E1 --> E2["apply rd.committedEntries() to state machine"]
+    E2 --> F
+    D -- yes --> E3["dispatch rd.messages() by type"]
+    E3 --> E4["MsgStorageApply: apply m.entries to state machine"]
+    E4 --> F["track highestApplied, storage.setApplied()"]
     F --> G["maybeSnapshot(highestApplied)"]
-    G --> H["node.advance()"]
+    G --> H{"asyncStorageWrites?"}
+    H -- no --> I["node.advance()"]
+    H -- yes --> J["no advance()"]
 ```
 
-`maybeSnapshot` logic:
+`maybeSnapshot` selects creation mode based on `snapshotStreaming`:
 
 ```java
 private void maybeSnapshot(long applied) {
     if (applied - lastSnapshotIndex < SNAPSHOT_ENTRIES_THRESHOLD) return; // threshold 10_000
-    byte[] data = stateMachine.serializeState();
     Eraftpb.ConfState cs = storage.initialState().confState();
-    storage.createSnapshot(applied, cs, data);   // inline: payload written into RocksDB cfSnap
+    if (snapshotStreaming) {
+        storage.createSnapshotStreaming(applied, cs, out -> out.write(stateMachine.serializeState()));
+    } else {
+        storage.createSnapshot(applied, cs, stateMachine.serializeState());
+    }
     lastSnapshotIndex = applied;
     storage.compact(applied);                     // truncate log before `applied`
 }
@@ -72,9 +81,10 @@ private void maybeSnapshot(long applied) {
 
 Notes:
 - Trigger: `applied - lastSnapshotIndex >= SNAPSHOT_ENTRIES_THRESHOLD`.
-- In the example, **local creation always uses inline `createSnapshot`** (payload in RocksDB), regardless of streaming.
+- When `snapshotStreaming = true`, uses `createSnapshotStreaming` (writes a side-car file), keeping the payload off-heap.
+- When `snapshotStreaming = false`, uses inline `createSnapshot` (payload in RocksDB).
 - After `compact(applied)`, `firstIndex` advances; this is exactly why the leader later needs to send a snapshot to a lagging follower.
-- Storage also offers `createSnapshotStreaming(...)` (writes an independent side-car file and clears `Snapshot.data`) so a huge state machine avoids holding the whole payload on heap; the example does not use it, but the interface is available.
+- The snapshot creation/send/apply flow in `processReady` is consistent across both sync and async storage write modes; see the [Async Storage Writes documentation](async-storage-writes.md) for details.
 
 ## 4. Phase 2: Leader Decides "a Snapshot Is Required" (Raft core)
 

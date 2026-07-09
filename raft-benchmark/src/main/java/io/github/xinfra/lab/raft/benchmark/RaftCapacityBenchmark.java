@@ -149,28 +149,28 @@ public class RaftCapacityBenchmark {
             }
 
             future.orTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                    .whenComplete((v, ex) -> {
-                        inflight.release();
-                        long latencyUs = (System.nanoTime() - sendNs) / 1000;
-                        if (!isMeasuring) {
-                            if (ex == null) warmupSuccess.increment();
-                            return;
-                        }
-                        if (ex != null) {
-                            Throwable cause = ex instanceof CompletionException ? ex.getCause() : ex;
-                            if (cause instanceof TimeoutException) {
-                                measureTimeouts.increment();
-                            } else {
-                                measureErrors.increment();
-                            }
+                .whenComplete((v, ex) -> {
+                    inflight.release();
+                    long latencyUs = (System.nanoTime() - sendNs) / 1000;
+                    if (!isMeasuring) {
+                        if (ex == null) warmupSuccess.increment();
+                        return;
+                    }
+                    if (ex != null) {
+                        Throwable cause = ex instanceof CompletionException ? ex.getCause() : ex;
+                        if (cause instanceof TimeoutException) {
+                            measureTimeouts.increment();
                         } else {
-                            measureSuccess.increment();
-                            int i = latIdx.getAndIncrement();
-                            if (i < latencies.length) {
-                                latencies[i] = latencyUs;
-                            }
+                            measureErrors.increment();
                         }
-                    });
+                    } else {
+                        measureSuccess.increment();
+                        int i = latIdx.getAndIncrement();
+                        if (i < latencies.length) {
+                            latencies[i] = latencyUs;
+                        }
+                    }
+                });
         }, 0, intervalUs, TimeUnit.MICROSECONDS);
 
         // Warmup phase
@@ -206,8 +206,8 @@ public class RaftCapacityBenchmark {
         }
 
         return new RunResult(type, payloadSize, targetRate,
-                measureSuccess.sum(), measureErrors.sum(), measureTimeouts.sum(),
-                measureDurationMs, latencies, latIdx.get());
+            measureSuccess.sum(), measureErrors.sum(), measureTimeouts.sum(),
+            measureDurationMs, latencies, latIdx.get());
     }
 
     // ======================== Propose sweep ========================
@@ -219,10 +219,10 @@ public class RaftCapacityBenchmark {
             char[] padding = new char[payloadSize];
             Arrays.fill(padding, 'x');
             KvCommand cmd = KvCommand.newBuilder()
-                    .setOp(KvCommand.Op.PUT)
-                    .setKey("cap-bench")
-                    .setValue(new String(padding))
-                    .build();
+                .setOp(KvCommand.Op.PUT)
+                .setKey("cap-bench")
+                .setValue(new String(padding))
+                .build();
 
             LOG.info("=== Propose capacity sweep: payload={}B ===", payloadSize);
 
@@ -232,14 +232,14 @@ public class RaftCapacityBenchmark {
                 all.add(r);
 
                 LOG.info("  -> success={} errors={} timeouts={} actualRate={} p50={}us p99={}us errorRate={}%",
-                        r.successCount, r.errorCount, r.timeoutCount,
-                        String.format("%.0f", r.actualRate()),
-                        r.percentile(50), r.percentile(99),
-                        String.format("%.1f", r.errorRate() * 100));
+                    r.successCount, r.errorCount, r.timeoutCount,
+                    String.format("%.0f", r.actualRate()),
+                    r.percentile(50), r.percentile(99),
+                    String.format("%.1f", r.errorRate() * 100));
 
                 if (r.errorRate() > ERROR_RATE_CUTOFF) {
                     LOG.info("  -> error rate > {}%, stopping sweep for this payload",
-                            (int) (ERROR_RATE_CUTOFF * 100));
+                        (int) (ERROR_RATE_CUTOFF * 100));
                     break;
                 }
             }
@@ -264,10 +264,10 @@ public class RaftCapacityBenchmark {
         bgProposer.scheduleAtFixedRate(() -> {
             int seq = bgSeq.incrementAndGet();
             KvCommand cmd = KvCommand.newBuilder()
-                    .setOp(KvCommand.Op.PUT)
-                    .setKey("bg-key-" + (seq % 1000))
-                    .setValue("bg-val-" + seq)
-                    .build();
+                .setOp(KvCommand.Op.PUT)
+                .setKey("bg-key-" + (seq % 1000))
+                .setValue("bg-val-" + seq)
+                .build();
             leader.proposeCommand(cmd);
         }, 0, bgIntervalUs, TimeUnit.MICROSECONDS);
 
@@ -280,14 +280,14 @@ public class RaftCapacityBenchmark {
             all.add(r);
 
             LOG.info("  -> success={} errors={} timeouts={} actualRate={} p50={}us p99={}us errorRate={}%",
-                    r.successCount, r.errorCount, r.timeoutCount,
-                    String.format("%.0f", r.actualRate()),
-                    r.percentile(50), r.percentile(99),
-                    String.format("%.1f", r.errorRate() * 100));
+                r.successCount, r.errorCount, r.timeoutCount,
+                String.format("%.0f", r.actualRate()),
+                r.percentile(50), r.percentile(99),
+                String.format("%.1f", r.errorRate() * 100));
 
             if (r.errorRate() > ERROR_RATE_CUTOFF) {
                 LOG.info("  -> error rate > {}%, stopping sweep",
-                        (int) (ERROR_RATE_CUTOFF * 100));
+                    (int) (ERROR_RATE_CUTOFF * 100));
                 break;
             }
         }
@@ -354,28 +354,28 @@ public class RaftCapacityBenchmark {
         if (!proposeResults.isEmpty()) {
             System.out.println("\n========== Propose Capacity Sweep ==========");
             System.out.printf("%-8s %8s %8s %8s %8s %10s %10s %10s %8s%n",
-                    "Payload", "Target", "Actual", "Success", "Errors", "p50(us)", "p99(us)", "p99.9(us)", "ErrRate");
+                "Payload", "Target", "Actual", "Success", "Errors", "p50(us)", "p99(us)", "p99.9(us)", "ErrRate");
             System.out.println("-".repeat(90));
             for (RunResult r : proposeResults) {
                 System.out.printf("%-8s %8d %8.0f %8d %8d %10d %10d %10d %7.1f%%%n",
-                        fmtBytes(r.payloadSize), r.targetRate, r.actualRate(),
-                        r.successCount, r.errorCount + r.timeoutCount,
-                        r.percentile(50), r.percentile(99), r.percentile(99.9),
-                        r.errorRate() * 100);
+                    fmtBytes(r.payloadSize), r.targetRate, r.actualRate(),
+                    r.successCount, r.errorCount + r.timeoutCount,
+                    r.percentile(50), r.percentile(99), r.percentile(99.9),
+                    r.errorRate() * 100);
             }
         }
 
         if (!readResults.isEmpty()) {
             System.out.println("\n========== Read Capacity Sweep (bg write " + READ_BG_WRITE_QPS + "qps) ==========");
             System.out.printf("%8s %8s %8s %8s %10s %10s %10s %8s%n",
-                    "Target", "Actual", "Success", "Errors", "p50(us)", "p99(us)", "p99.9(us)", "ErrRate");
+                "Target", "Actual", "Success", "Errors", "p50(us)", "p99(us)", "p99.9(us)", "ErrRate");
             System.out.println("-".repeat(82));
             for (RunResult r : readResults) {
                 System.out.printf("%8d %8.0f %8d %8d %10d %10d %10d %7.1f%%%n",
-                        r.targetRate, r.actualRate(),
-                        r.successCount, r.errorCount + r.timeoutCount,
-                        r.percentile(50), r.percentile(99), r.percentile(99.9),
-                        r.errorRate() * 100);
+                    r.targetRate, r.actualRate(),
+                    r.successCount, r.errorCount + r.timeoutCount,
+                    r.percentile(50), r.percentile(99), r.percentile(99.9),
+                    r.errorRate() * 100);
             }
         }
     }
@@ -418,7 +418,7 @@ public class RaftCapacityBenchmark {
                 long id = i + 1;
                 Path dir = tmpDir.resolve("node-" + id);
                 Files.createDirectories(dir);
-                servers[i] = new KvServer(id, raftPorts[i], kvPorts[i], dir, peers, true);
+                servers[i] = new KvServer(id, raftPorts[i], kvPorts[i], dir, peers, true, true, true);
             }
 
             KvServer leader = RaftProposeBenchmark.waitForLeader(servers, 30_000);
@@ -429,10 +429,10 @@ public class RaftCapacityBenchmark {
                 LOG.info("Pre-populating {} keys for read benchmark...", READ_KEY_COUNT);
                 for (int i = 0; i < READ_KEY_COUNT; i++) {
                     KvCommand cmd = KvCommand.newBuilder()
-                            .setOp(KvCommand.Op.PUT)
-                            .setKey("read-key-" + i)
-                            .setValue("value-" + i)
-                            .build();
+                        .setOp(KvCommand.Op.PUT)
+                        .setKey("read-key-" + i)
+                        .setValue("value-" + i)
+                        .build();
                     leader.proposeCommand(cmd).get(10, TimeUnit.SECONDS);
                 }
             }
@@ -446,13 +446,19 @@ public class RaftCapacityBenchmark {
         } finally {
             for (int i = servers.length - 1; i >= 0; i--) {
                 if (servers[i] != null) {
-                    try { servers[i].close(); } catch (Exception ignored) {}
+                    try {
+                        servers[i].close();
+                    } catch (Exception ignored) {
+                    }
                 }
             }
             Thread.sleep(500);
             try (Stream<Path> walk = Files.walk(tmpDir)) {
                 walk.sorted(Comparator.reverseOrder()).forEach(p -> {
-                    try { Files.deleteIfExists(p); } catch (IOException ignored) {}
+                    try {
+                        Files.deleteIfExists(p);
+                    } catch (IOException ignored) {
+                    }
                 });
             }
         }

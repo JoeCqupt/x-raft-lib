@@ -196,7 +196,9 @@ AsyncStorageWrites 模式下，`advance()` 不再由应用显式调用。RawNode
 - `MsgStorageAppendResp` → 告知 Raft 持久化完成
 - `MsgStorageApplyResp` → 告知 Raft 应用完成
 
-这使得持久化和应用可以在不同线程中并行执行，提高吞吐。
+这使得持久化和应用可以在不同线程中并行执行，提高吞吐。DefaultNode 在异步模式下不设置 `waitingAdvance` 标志，允许连续发射多个 Ready。
+
+`raft-examples` 中的 `RaftKVNode` 通过 `--async-storage-writes` 开关演示了完整的异步模式用法。详见 [异步存储写入文档](async-storage-writes.zh.md)。
 
 ## 两种使用模式
 

@@ -7,6 +7,7 @@
 package io.github.xinfra.lab.raft.examples;
 
 import io.github.xinfra.lab.raft.RaftStateType;
+import io.github.xinfra.lab.raft.proto.Eraftpb;
 import io.github.xinfra.lab.raft.examples.proto.DeleteRequest;
 import io.github.xinfra.lab.raft.examples.proto.GetRequest;
 import io.github.xinfra.lab.raft.examples.proto.GetResponse;
@@ -18,8 +19,12 @@ import io.github.xinfra.lab.raft.examples.proto.GetClusterInfoRequest;
 import io.github.xinfra.lab.raft.examples.proto.GetClusterInfoResponse;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+import java.util.stream.Stream;
 
 import java.net.ServerSocket;
 import java.nio.file.Path;
@@ -37,11 +42,20 @@ class KvServerIntegrationTest {
 
     @TempDir Path tmp;
 
-    @Test
-    void fullFeatureShowcase() throws Exception {
+    static Stream<Arguments> modeMatrix() {
+        return Stream.of(
+                Arguments.of(false, false),
+                Arguments.of(true, false),
+                Arguments.of(false, true)
+        );
+    }
+
+    @ParameterizedTest(name = "snapshotStreaming={0}, asyncStorageWrites={1}")
+    @MethodSource("modeMatrix")
+    void fullFeatureShowcase(boolean snapshotStreaming, boolean asyncStorageWrites) throws Exception {
         int nodeCount = 3;
-        int[] raftPorts = freePorts(nodeCount + 1);
-        int[] kvPorts = freePorts(nodeCount + 1);
+        int[] raftPorts = freePorts(nodeCount + 2);
+        int[] kvPorts = freePorts(nodeCount + 2);
 
         Map<Long, String> peers = new LinkedHashMap<>();
         for (int i = 0; i < nodeCount; i++) {
@@ -55,7 +69,7 @@ class KvServerIntegrationTest {
             for (int i = 0; i < nodeCount; i++) {
                 long id = i + 1;
                 servers.add(new KvServer(id, raftPorts[i], kvPorts[i],
-                        tmp.resolve("node-" + id), peers, true));
+                        tmp.resolve("node-" + id), peers, true, snapshotStreaming, asyncStorageWrites));
             }
 
             KvServer leader = awaitLeaderServer(servers, 15_000);
@@ -145,7 +159,7 @@ class KvServerIntegrationTest {
             allPeers.put(joinerId, "localhost:" + raftPorts[nodeCount]);
 
             KvServer joiner = new KvServer(joinerId, raftPorts[nodeCount], kvPorts[nodeCount],
-                    tmp.resolve("node-" + joinerId), allPeers, false);
+                    tmp.resolve("node-" + joinerId), allPeers, false, snapshotStreaming, asyncStorageWrites);
             servers.add(joiner);
 
             newLeader.addNode(joinerId, "localhost:" + raftPorts[nodeCount], true)
@@ -168,6 +182,75 @@ class KvServerIntegrationTest {
             assertThat(awaitTrue(() -> servers.stream().allMatch(s ->
                     s.stateMachine().get("phase").orElse("").equals("7-done")), 10_000))
                     .as("4-node cluster converged").isTrue();
+
+            // === Phase 8: Node Removal (ConfChangeRemoveNode) ===
+            KvServer phase8Leader = findLeaderServer(servers);
+            assertThat(phase8Leader).isNotNull();
+
+            phase8Leader.removeNode(joinerId).get(30, TimeUnit.SECONDS);
+
+            assertThat(awaitTrue(() -> {
+                var cs = phase8Leader.raftKvNode().storage.initialState().confState();
+                return !cs.getVotersList().contains(joinerId) && cs.getVotersCount() == 3;
+            }, 15_000)).as("node %d removed from cluster", joinerId).isTrue();
+
+            servers.remove(joiner);
+
+            phase8Leader.proposeCommand(KvCommand.newBuilder().setOp(KvCommand.Op.PUT)
+                    .setKey("phase").setValue("8-done").build()).get(10, TimeUnit.SECONDS);
+            assertThat(awaitTrue(() -> servers.stream().allMatch(s ->
+                    s.stateMachine().get("phase").orElse("").equals("8-done")), 10_000))
+                    .as("3-node cluster works after removal").isTrue();
+
+            // === Phase 9: Joint Consensus (atomic voter replacement) ===
+            // Multi-change ConfChangeV2 (>1 change) triggers Joint Consensus.
+            // With default Auto transition, raft enters joint config (both old
+            // and new quorums must agree) then auto-leaves once committed.
+            KvServer phase9Leader = findLeaderServer(servers);
+            assertThat(phase9Leader).isNotNull();
+            long victimId = servers.stream()
+                    .filter(s -> s.status().id != phase9Leader.status().id)
+                    .findFirst().orElseThrow().status().id;
+
+            long replacementId = nodeCount + 2;
+            int replacementIdx = nodeCount + 1;
+            Map<Long, String> replacementPeers = new LinkedHashMap<>(peers);
+            replacementPeers.put(replacementId, "localhost:" + raftPorts[replacementIdx]);
+
+            KvServer replacement = new KvServer(replacementId, raftPorts[replacementIdx],
+                    kvPorts[replacementIdx], tmp.resolve("node-" + replacementId),
+                    replacementPeers, false, snapshotStreaming, asyncStorageWrites);
+            servers.add(replacement);
+
+            Eraftpb.ConfState jointCs = phase9Leader
+                    .replaceNode(victimId, replacementId, "localhost:" + raftPorts[replacementIdx])
+                    .get(30, TimeUnit.SECONDS);
+
+            assertThat(jointCs.getVotersOutgoingCount())
+                    .as("enter joint: votersOutgoing must be non-empty").isPositive();
+            assertThat(jointCs.getVotersList()).contains(replacementId);
+            assertThat(jointCs.getVotersOutgoingList()).contains(victimId);
+
+            assertThat(awaitTrue(() -> {
+                var cs = phase9Leader.raftKvNode().storage.initialState().confState();
+                return cs.getVotersOutgoingCount() == 0
+                        && cs.getVotersList().contains(replacementId)
+                        && !cs.getVotersList().contains(victimId)
+                        && cs.getVotersCount() == 3;
+            }, 15_000)).as("auto-leave joint: final config has replacement, not victim").isTrue();
+
+            KvServer victim = servers.stream()
+                    .filter(s -> s.status().id == victimId).findFirst().orElse(null);
+            if (victim != null) servers.remove(victim);
+
+            KvServer postJointLeader = awaitLeaderServer(servers, 15_000);
+            assertThat(postJointLeader).isNotNull();
+
+            postJointLeader.proposeCommand(KvCommand.newBuilder().setOp(KvCommand.Op.PUT)
+                    .setKey("phase").setValue("9-done").build()).get(10, TimeUnit.SECONDS);
+            assertThat(awaitTrue(() -> servers.stream().allMatch(s ->
+                    s.stateMachine().get("phase").orElse("").equals("9-done")), 10_000))
+                    .as("cluster works after joint consensus replacement").isTrue();
 
         } finally {
             for (ManagedChannel ch : channels) {

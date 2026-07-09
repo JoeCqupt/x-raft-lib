@@ -48,21 +48,30 @@ if (snapshotStreaming) {
 flowchart TD
     A["readyLoop 循环"] --> B["node.ready() 取出 Ready"]
     B --> C["storage.writeBatched(entries, hardState, snapshot) 持久化"]
-    C --> D["发送 rd.messages()"]
-    D --> E["应用 committedEntries 到状态机"]
-    E --> F["记录 highestApplied，storage.setApplied()"]
+    C --> D{"asyncStorageWrites?"}
+    D -- 否 --> E1["发送 rd.messages()"]
+    E1 --> E2["应用 rd.committedEntries() 到状态机"]
+    E2 --> F
+    D -- 是 --> E3["按消息类型分发 rd.messages()"]
+    E3 --> E4["MsgStorageApply: 应用 m.entries 到状态机"]
+    E4 --> F["记录 highestApplied，storage.setApplied()"]
     F --> G["maybeSnapshot(highestApplied)"]
-    G --> H["node.advance()"]
+    G --> H{"asyncStorageWrites?"}
+    H -- 否 --> I["node.advance()"]
+    H -- 是 --> J["不调用 advance"]
 ```
 
-`maybeSnapshot` 的逻辑：
+`maybeSnapshot` 根据 `snapshotStreaming` 选择创建方式：
 
 ```java
 private void maybeSnapshot(long applied) {
     if (applied - lastSnapshotIndex < SNAPSHOT_ENTRIES_THRESHOLD) return; // 阈值 10_000
-    byte[] data = stateMachine.serializeState();
     Eraftpb.ConfState cs = storage.initialState().confState();
-    storage.createSnapshot(applied, cs, data);   // inline：payload 写入 RocksDB cfSnap
+    if (snapshotStreaming) {
+        storage.createSnapshotStreaming(applied, cs, out -> out.write(stateMachine.serializeState()));
+    } else {
+        storage.createSnapshot(applied, cs, stateMachine.serializeState());
+    }
     lastSnapshotIndex = applied;
     storage.compact(applied);                     // 截断 applied 之前的日志
 }
@@ -70,9 +79,10 @@ private void maybeSnapshot(long applied) {
 
 要点：
 - 触发条件：`applied - lastSnapshotIndex >= SNAPSHOT_ENTRIES_THRESHOLD`。
-- 示例中**无论是否 streaming，本地创建都用 inline `createSnapshot`**（payload 存 RocksDB）。
+- `snapshotStreaming = true` 时使用 `createSnapshotStreaming`（写独立 side-car 文件），payload 不驻留堆内存。
+- `snapshotStreaming = false` 时使用 inline `createSnapshot`（payload 存 RocksDB）。
 - `compact(applied)` 之后，`firstIndex` 前移；这正是后续 Leader 需要给落后 Follower 发快照的根因。
-- Storage 也提供 `createSnapshotStreaming(...)`（写独立 side-car 文件、清空 `Snapshot.data`），供超大状态机避免把整个 payload 放进堆内存；示例未使用，但接口已具备。
+- `processReady` 中的快照创建/发送/应用流程在同步和异步两种存储写入模式下均一致，详见 [异步存储写入文档](async-storage-writes.zh.md)。
 
 ## 4. 阶段二：Leader 判定「必须发快照」（Raft 核心）
 

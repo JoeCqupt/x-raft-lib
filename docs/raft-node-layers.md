@@ -198,7 +198,9 @@ Once complete, the application delivers response messages via `step()`:
 - `MsgStorageAppendResp` → informs Raft that persistence is done
 - `MsgStorageApplyResp` → informs Raft that application is done
 
-This allows persistence and application to run in parallel on different threads, improving throughput.
+This allows persistence and application to run in parallel on different threads, improving throughput. DefaultNode skips setting the `waitingAdvance` flag in async mode, allowing consecutive Ready emissions.
+
+The `RaftKVNode` in `raft-examples` demonstrates full async mode usage via the `--async-storage-writes` flag. See [Async Storage Writes](async-storage-writes.md) for details.
 
 ## Two Usage Modes
 
