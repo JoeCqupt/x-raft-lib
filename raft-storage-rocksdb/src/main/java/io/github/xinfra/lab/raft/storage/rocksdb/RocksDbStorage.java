@@ -128,6 +128,8 @@ public class RocksDbStorage implements Storage, AutoCloseable {
     private final ColumnFamilyHandle cfState;
     private final ColumnFamilyHandle cfSnap;
     private final WriteOptions writeOpts;
+    private final ColumnFamilyOptions cfOpts;
+    private final DBOptions dbOpts;
     private final Path snapDir;
 
     private final LRUCache blockCache;
@@ -191,7 +193,7 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                         .setCacheIndexAndFilterBlocks(true);
             }
 
-            ColumnFamilyOptions cfOpts = new ColumnFamilyOptions()
+            this.cfOpts = new ColumnFamilyOptions()
                     .setTableFormatConfig(tableConfig)
                     .setWriteBufferSize(options.writeBufferSize)
                     .setMaxWriteBufferNumber(options.maxWriteBufferNumber)
@@ -211,11 +213,11 @@ public class RocksDbStorage implements Storage, AutoCloseable {
             }
 
             this.cfHandles = new ArrayList<>();
-            DBOptions dbOpts = new DBOptions()
+            this.dbOpts = new DBOptions()
                     .setCreateIfMissing(true)
                     .setCreateMissingColumnFamilies(true)
                     .setMaxBackgroundJobs(options.maxBackgroundJobs);
-            this.db = RocksDB.open(dbOpts, dir.toString(), descriptors, this.cfHandles);
+            this.db = RocksDB.open(this.dbOpts, dir.toString(), descriptors, this.cfHandles);
             // cfHandles.get(0) is the RocksDB default CF (unused by raft)
             this.cfLog = cfHandles.get(1);
             this.cfState = cfHandles.get(2);
@@ -824,6 +826,16 @@ public class RocksDbStorage implements Storage, AutoCloseable {
                 db.close();
             } catch (Throwable t) {
                 LOG.warn("close db failed: {}", t.toString());
+            }
+            try {
+                dbOpts.close();
+            } catch (Throwable t) {
+                LOG.warn("close dbOpts failed: {}", t.toString());
+            }
+            try {
+                cfOpts.close();
+            } catch (Throwable t) {
+                LOG.warn("close cfOpts failed: {}", t.toString());
             }
             try {
                 if (bloomFilter != null) bloomFilter.close();

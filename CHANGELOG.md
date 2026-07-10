@@ -8,6 +8,46 @@ once it reaches `1.0.0`. Pre-`1.0` releases may break compatibility.
 
 ## [Unreleased]
 
+### Fixed
+- **GrpcTransport: snapshot sends no longer block heartbeats (P0)** — Added a
+  dedicated `snapshotExecutor` (2-thread pool) for `MsgSnapshot` and streaming
+  snapshot sends. Previously all sends shared one fixed thread pool; two
+  concurrent 60 s snapshot sends could starve heartbeat delivery and trigger
+  election storms.
+- **GrpcTransport: inline snapshot send failures now propagate (P0)** —
+  `PeerChannel.sendSnapshot()` previously swallowed all exceptions, so the
+  outer `send()` catch that fires `unreachableListener.onUnreachable()` was
+  never reached for snapshot failures. Exceptions are now re-thrown.
+- **GrpcTransport: unknown peer fires unreachable listener (P1)** —
+  `send()` to an unregistered peer now calls `unreachableListener` (previously
+  only logged a warning and dropped silently).
+- **RocksDbStorage: native memory leak for JNI-backed options (P1)** —
+  `ColumnFamilyOptions` and `DBOptions` were created as constructor-local
+  variables and never closed. They are now stored as fields and explicitly
+  closed in `close()` after `db.close()`.
+- **RaftKVNode: async mode persistence/apply failures are now fatal (P0)** —
+  `handleStorageAppend()` and `handleStorageApply()` previously caught
+  exceptions and only logged them. A persistence failure now sets
+  `running = false` and interrupts the applier thread, causing `readyLoop()`
+  to exit and `drainPendingFutures()` to fail all pending proposals.
+- **RaftKVNode: inline snapshot mode no longer causes StateSnapshot
+  starvation** — After sending a `MsgSnapshot` in inline mode, the host now
+  calls `node.reportSnapshot(to, SnapshotFinish)` so the leader's progress
+  tracker transitions back from `StateSnapshot` to `StateProbe`. Without this,
+  the leader could never resume replication to the target peer.
+
+### Changed
+- **RaftKVNode: snapshot threshold is now configurable** — Replaced the
+  hard-coded `SNAPSHOT_ENTRIES_THRESHOLD = 10_000` constant with a
+  constructor parameter `snapshotThreshold`, allowing hosts to tune snapshot
+  frequency per deployment.
+- **KvServerIntegrationTest: expanded to 11-phase full-feature showcase** —
+  Covers single-node bootstrap, learner-to-voter promotion (nodes 2–4),
+  propose + convergence, linearizable read, leader transfer, snapshot
+  creation + learner catch-up, gRPC layer (put/get/delete + admin), node
+  removal, and joint consensus atomic voter replacement. Parameterised across
+  three mode combinations (sync/async × inline/streaming).
+
 ## [0.1.0-RC1] - 2026-06-02
 
 First public release. Protocol parity with etcd-io/raft, plus the

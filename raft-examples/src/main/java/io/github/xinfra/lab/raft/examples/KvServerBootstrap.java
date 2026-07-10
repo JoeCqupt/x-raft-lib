@@ -65,7 +65,7 @@ public final class KvServerBootstrap {
 
         Map<Long, String> peers = parsePeers(peersStr);
 
-        KvServer server = new KvServer(id, raftPort, kvPort, Path.of(dataDir), peers, bootstrap, snapshotStreaming, asyncStorageWrites);
+        KvServer server = new KvServer(id, raftPort, kvPort, Path.of(dataDir), peers, bootstrap, snapshotStreaming, asyncStorageWrites, 10_000);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             LOG.info("shutting down KvServer node {}", server.status().id);
             server.close();

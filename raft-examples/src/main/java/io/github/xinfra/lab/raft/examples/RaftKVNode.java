@@ -45,7 +45,7 @@ public class RaftKVNode implements AutoCloseable {
         ApplyFailureException(String msg, Throwable cause) { super(msg, cause); }
     }
 
-    private static final long SNAPSHOT_ENTRIES_THRESHOLD = 10_000;
+    private final long snapshotThreshold;
     private static final int MAX_CONSECUTIVE_ERRORS = 5;
 
     public final long id;
@@ -62,6 +62,7 @@ public class RaftKVNode implements AutoCloseable {
     private volatile boolean running = true;
 
     private volatile long lastSnapshotIndex;
+    private volatile boolean everAdmitted;
 
     private final ConcurrentHashMap<Long, String> peerAddresses = new ConcurrentHashMap<>();
 
@@ -87,13 +88,15 @@ public class RaftKVNode implements AutoCloseable {
                       boolean bootstrap,
                       Transport transport,
                       boolean snapshotStreaming,
-                      boolean asyncStorageWrites) throws Exception {
+                      boolean asyncStorageWrites,
+                      long snapshotThreshold) throws Exception {
         this.id = id;
         this.stateMachine = new KvStateMachine(kvDataDir);
         this.storage = new RocksDbStorage(storageDir);
         this.transport = transport;
         this.lastSnapshotIndex = storage.getApplied();
         this.asyncStorageWrites = asyncStorageWrites;
+        this.snapshotThreshold = snapshotThreshold;
 
         Config cfg = Config.builder()
                 .id(id)
@@ -416,7 +419,9 @@ public class RaftKVNode implements AutoCloseable {
                 deliverOrSend(resp);
             }
         } catch (Exception e) {
-            LOG.error("async persist failed", e);
+            LOG.error("fatal: async persist failed, stopping node", e);
+            running = false;
+            applier.interrupt();
         }
     }
 
@@ -440,7 +445,9 @@ public class RaftKVNode implements AutoCloseable {
                 deliverOrSend(resp);
             }
         } catch (Exception e) {
-            LOG.error("async apply failed", e);
+            LOG.error("fatal: async apply failed, stopping node", e);
+            running = false;
+            applier.interrupt();
         }
     }
 
@@ -505,6 +512,9 @@ public class RaftKVNode implements AutoCloseable {
             sendSnapshotOutOfBand(m);
         } else {
             transport.send(m.getTo(), m);
+            if (m.getMsgType() == Eraftpb.MessageType.MsgSnapshot) {
+                node.reportSnapshot(m.getTo(), SnapshotStatus.SnapshotFinish);
+            }
         }
     }
 
@@ -572,12 +582,20 @@ public class RaftKVNode implements AutoCloseable {
     }
 
     private void checkSelfRemoval(Eraftpb.ConfChangeV2 cc, Eraftpb.ConfState cs) {
-        if (!cs.getVotersList().contains(id)
-                && !cs.getLearnersList().contains(id)
-                && !cs.getVotersOutgoingList().contains(id)) {
-            LOG.info("node {} removed from cluster, shutting down", id);
+        boolean inConfig = cs.getVotersList().contains(id)
+                || cs.getLearnersList().contains(id)
+                || cs.getVotersOutgoingList().contains(id);
+        if (inConfig) {
+            everAdmitted = true;
+            return;
+        }
+        // Only trigger removal if the node was previously admitted to the cluster.
+        // Without this guard, replaying historical conf changes (e.g., bootstrap
+        // entries from before this node joined) would incorrectly shut it down.
+        if (everAdmitted) {
+            LOG.info("node {} removed from cluster, signalling shutdown", id);
+            running = false;
             removedFuture.complete(null);
-            close();
         }
     }
 
@@ -630,7 +648,7 @@ public class RaftKVNode implements AutoCloseable {
     }
 
     private void maybeSnapshot(long applied) {
-        if (applied - lastSnapshotIndex < SNAPSHOT_ENTRIES_THRESHOLD) return;
+        if (applied - lastSnapshotIndex < snapshotThreshold) return;
         try {
             Eraftpb.ConfState cs = storage.initialState().confState();
             if (snapshotStreaming) {

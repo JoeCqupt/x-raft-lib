@@ -826,7 +826,7 @@ if (cfg.getVoters().outgoing().contains(id)) {
 
 ### Q26: 流式快照如何创建？生成什么文件？
 
-**触发条件：** 宿主每轮 `processReady` 尾部调用 `maybeSnapshot(applied)`，当 `applied - lastSnapshotIndex >= SNAPSHOT_ENTRIES_THRESHOLD`（默认 10,000）时创建。
+**触发条件：** 宿主每轮 `processReady` 尾部调用 `maybeSnapshot(applied)`，当 `applied - lastSnapshotIndex >= snapshotThreshold` 时创建。`snapshotThreshold` 是 `RaftKVNode` 构造参数，由宿主按部署环境自行配置。
 
 **`createSnapshotStreaming` 三阶段：**
 
@@ -898,9 +898,11 @@ transport.sendSnapshot(to, m, in, (ok, err) ->
     node.reportSnapshot(to, ok ? SnapshotFinish : SnapshotFailure));  // 回调上报结果
 ```
 
-**传输细节（`GrpcTransport.sendSnapshotStreaming`）：** 固定 buffer 边读 InputStream 边发 `SnapshotChunk`（client-streaming RPC），多 GB 快照不整体入堆；首个 chunk = header（4B 长度 + metaMsg），后续为 payload 分片；在 `sendExecutor` 线程池异步执行，不阻塞 Ready 循环。
+**传输细节（`GrpcTransport.sendSnapshotStreaming`）：** 固定 buffer 边读 InputStream 边发 `SnapshotChunk`（client-streaming RPC），多 GB 快照不整体入堆；首个 chunk = header（4B 长度 + metaMsg），后续为 payload 分片；在独立的 `snapshotExecutor` 线程池（2 线程）异步执行，不阻塞 `sendExecutor` 上的心跳和日志复制。
 
-**源码位置：** `Raft.maybeSendAppend()` / `Raft.maybeSendSnapshot()` / `RaftKVNode.sendSnapshotOutOfBand()` / `GrpcTransport.sendSnapshotStreaming()`
+**Inline 模式的 `reportSnapshot`：** 若 `snapshotStreaming = false`，`MsgSnapshot` 走普通 `transport.send()` 发送。发送后宿主必须调用 `node.reportSnapshot(to, SnapshotFinish)`，否则 Leader 的 Progress 会永久停留在 `StateSnapshot`（`isPaused()=true`），该 follower 的日志复制将被无限阻塞。流式模式的 `reportSnapshot` 由 `sendSnapshotOutOfBand` 的回调自动完成。
+
+**源码位置：** `Raft.maybeSendAppend()` / `Raft.maybeSendSnapshot()` / `RaftKVNode.sendPeerMessage()` / `RaftKVNode.sendSnapshotOutOfBand()` / `GrpcTransport.sendSnapshotStreaming()`
 
 ---
 

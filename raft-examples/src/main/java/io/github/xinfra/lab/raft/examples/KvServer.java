@@ -31,12 +31,13 @@ public final class KvServer implements AutoCloseable {
 
     public KvServer(long nodeId, int raftPort, int kvPort, Path dataDir,
                     Map<Long, String> peerAddresses, boolean bootstrap,
-                    boolean snapshotStreaming, boolean asyncStorageWrites) throws Exception {
+                    boolean snapshotStreaming, boolean asyncStorageWrites,
+                    long snapshotThreshold) throws Exception {
         GrpcTransport transport = new GrpcTransport(nodeId, raftPort);
         this.raftKvNode = new RaftKVNode(
                 nodeId, dataDir.resolve("raft"), dataDir.resolve("kv"),
                 peerAddresses, bootstrap, transport, snapshotStreaming,
-                asyncStorageWrites);
+                asyncStorageWrites, snapshotThreshold);
 
         this.grpcServer = ServerBuilder.forPort(kvPort)
                 .addService(new KvServiceImpl(this))
@@ -44,7 +45,7 @@ public final class KvServer implements AutoCloseable {
                 .build()
                 .start();
 
-        raftKvNode.onRemoved().thenRun(this::close);
+        raftKvNode.onRemoved().thenRunAsync(this::close);
 
         LOG.info("KvServer node {} started: raft={}, kv={}", nodeId, raftPort, kvPort);
     }
