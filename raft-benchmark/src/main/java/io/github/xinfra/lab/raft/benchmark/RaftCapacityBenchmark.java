@@ -112,8 +112,6 @@ public class RaftCapacityBenchmark {
     static RunResult runOneRate(KvServer leader, KvCommand cmd,
                                 String type, int payloadSize, int targetRate) {
         Semaphore inflight = new Semaphore(MAX_INFLIGHT);
-        int totalSeconds = WARMUP_SECONDS + MEASURE_SECONDS;
-        int maxOps = targetRate * totalSeconds + targetRate;
         long[] latencies = new long[targetRate * MEASURE_SECONDS + targetRate];
         AtomicInteger latIdx = new AtomicInteger(0);
         LongAdder warmupSuccess = new LongAdder();
@@ -130,8 +128,6 @@ public class RaftCapacityBenchmark {
             t.setDaemon(true);
             return t;
         });
-
-        long startNs = System.nanoTime();
 
         scheduler.scheduleAtFixedRate(() -> {
             if (stopped.get()) return;
