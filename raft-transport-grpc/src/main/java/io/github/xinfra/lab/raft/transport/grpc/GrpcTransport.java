@@ -86,6 +86,7 @@ public class GrpcTransport implements Transport {
 
     private final Map<Long, PeerChannel> peers = new ConcurrentHashMap<>();
     private final ExecutorService sendExecutor;
+    private final ExecutorService snapshotExecutor;
 
     private volatile MessageReceiver receiver;
     private volatile SnapshotSink snapshotSink;
@@ -132,13 +133,16 @@ public class GrpcTransport implements Transport {
         } else {
             this.clientSslContext = null;
         }
-        // One thread per peer is overkill; a small pool is enough for the
-        // hot path (heartbeat fan-out + propose batch). Snapshot streams
-        // are blocking and run on this pool too.
         this.sendExecutor = Executors.newFixedThreadPool(
                 Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
                 r -> {
                     Thread t = new Thread(r, "raft-grpc-send-" + localId);
+                    t.setDaemon(false);
+                    return t;
+                });
+        this.snapshotExecutor = Executors.newFixedThreadPool(2,
+                r -> {
+                    Thread t = new Thread(r, "raft-grpc-snap-" + localId);
                     t.setDaemon(false);
                     return t;
                 });
@@ -216,9 +220,13 @@ public class GrpcTransport implements Transport {
         PeerChannel pc = peers.get(peerId);
         if (pc == null) {
             LOG.warn("dropping message to unknown peer {} (msgType={})", peerId, msg.getMsgType());
+            UnreachableListener l = unreachableListener;
+            if (l != null) l.onUnreachable(peerId);
             return;
         }
-        sendExecutor.execute(() -> pc.send(msg));
+        ExecutorService exec = msg.getMsgType() == Eraftpb.MessageType.MsgSnapshot
+                ? snapshotExecutor : sendExecutor;
+        exec.execute(() -> pc.send(msg));
     }
 
     @Override
@@ -234,7 +242,7 @@ public class GrpcTransport implements Transport {
             cb.onComplete(false, new IllegalArgumentException("unknown peer " + peerId));
             return;
         }
-        sendExecutor.execute(() -> pc.sendSnapshotStreaming(metaMsg, payload, cb));
+        snapshotExecutor.execute(() -> pc.sendSnapshotStreaming(metaMsg, payload, cb));
     }
 
     /**
@@ -274,12 +282,17 @@ public class GrpcTransport implements Transport {
             }
         }
         sendExecutor.shutdown();
+        snapshotExecutor.shutdown();
         try {
             if (!sendExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
                 sendExecutor.shutdownNow();
             }
+            if (!snapshotExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                snapshotExecutor.shutdownNow();
+            }
         } catch (InterruptedException e) {
             sendExecutor.shutdownNow();
+            snapshotExecutor.shutdownNow();
             Thread.currentThread().interrupt();
         }
         for (PeerChannel pc : peers.values()) pc.shutdown();
@@ -428,8 +441,12 @@ public class GrpcTransport implements Transport {
             } catch (java.util.concurrent.TimeoutException te) {
                 LOG.warn("snapshot send to peer {} timed out", peerId);
                 req.onError(te);
+                throw new RuntimeException(te);
             } catch (Throwable t) {
                 LOG.warn("snapshot send to peer {} failed: {}", peerId, t.toString());
+                if (t instanceof RuntimeException re) throw re;
+                if (t instanceof Error e) throw e;
+                throw new RuntimeException(t);
             }
         }
 

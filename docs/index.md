@@ -15,6 +15,10 @@ A faithful Java port of [etcd-io/raft](https://github.com/etcd-io/raft) — a pu
 | Document | Description |
 |----------|-------------|
 | [Architecture & Design](architecture.md) | Design philosophy, module structure, core internals, Storage & Transport interfaces |
+| [Raft / RawNode / Node Layers](raft-node-layers.md) | Three-layer API architecture, Ready lifecycle, event loop internals, usage modes |
+| [Snapshot Flow](snapshot-flow.md) | End-to-end snapshot creation, transfer, and installation — inline vs streaming modes |
+| [Async Storage Writes](async-storage-writes.md) | AsyncStorageWrites mode: usage, message protocol, safety analysis |
+| [Code Q&A](code-qa.zh.md) | Implementation detail Q&A: Ready messages, Joint Consensus, log replication |
 | [Getting Started](getting-started.md) | Prerequisites, run the KV demo, embed in your application, configuration reference |
 | [Testing Strategy](testing.md) | Test pyramid, unit / property / fuzz / integration / chaos / soak / linearizability |
 | [CI/CD & Quality Gates](ci.md) | CI pipeline, fuzz nightly, chaos soak weekly, release process |

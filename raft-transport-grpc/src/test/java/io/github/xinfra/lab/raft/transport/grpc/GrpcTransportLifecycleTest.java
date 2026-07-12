@@ -159,20 +159,16 @@ class GrpcTransportLifecycleTest {
 
     @Test
     void sendToUnknownPeerIsLoggedAndDropped() throws Exception {
-        // Test the warn-and-drop branch: no peer registered for id 99.
-        // Contract: no exception, no callback fired (unreachable listener
-        // is only for transport-level errors, not for "we never knew you").
         AtomicInteger unreachableCount = new AtomicInteger();
         try (GrpcTransport t = bareTransport(1L, freePort())) {
             t.setReceiver(m -> { });
             t.setUnreachableListener(peerId -> unreachableCount.incrementAndGet());
             t.start();
             t.send(99L, heartbeat(1, 99, 1));
-            // Give the send-executor a moment to NOT do anything async.
             Thread.sleep(100);
             assertThat(unreachableCount.get())
-                    .as("unknown peer doesn't fire unreachable listener — never registered")
-                    .isZero();
+                    .as("unknown peer fires unreachable listener")
+                    .isEqualTo(1);
         }
     }
 

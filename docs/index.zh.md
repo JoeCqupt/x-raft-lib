@@ -15,6 +15,10 @@
 | 文档 | 说明 |
 |------|------|
 | [架构与设计](architecture.zh.md) | 设计理念、模块结构、核心内部实现、Storage 与 Transport 接口 |
+| [Raft / RawNode / Node 三层架构](raft-node-layers.zh.md) | 三层 API 分层、Ready 生命周期、事件循环内部机制、使用模式 |
+| [快照完整流程](snapshot-flow.zh.md) | 快照创建、传输、安装的端到端流程，inline 与 streaming 两种模式 |
+| [异步存储写入](async-storage-writes.zh.md) | AsyncStorageWrites 模式的使用方式、消息协议、安全性论证 |
+| [代码问答](code-qa.zh.md) | Ready 消息机制、Joint Consensus、日志复制等实现细节问答 |
 | [快速开始](getting-started.zh.md) | 环境准备、运行 KV 示例、集成到你的应用、配置参考 |
 | [测试策略](testing.zh.md) | 测试金字塔：单元 / 属性 / 模糊 / 集成 / 混沌 / 浸泡 / 线性一致性 |
 | [CI/CD 与质量门禁](ci.zh.md) | CI 流水线、每夜模糊测试、每周混沌浸泡、发布流程 |

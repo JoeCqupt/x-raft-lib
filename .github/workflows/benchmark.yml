@@ -11,6 +11,9 @@ on:
     - cron: '17 3 * * 6'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: benchmark-weekly
   cancel-in-progress: true
@@ -48,15 +51,12 @@ jobs:
           -rf json -rff core-result.json
           -wi 3 -w 5s -i 5 -r 10s -f 1 -t 1
 
-      - name: Run propose throughput & latency benchmark (concurrency sweep)
-        run: |
-          for t in 1 4 8 16 32; do
-            echo "=== propose -t $t ==="
-            java -jar raft-benchmark/target/raft-benchmark.jar \
-              RaftProposeBenchmark \
-              -rf json -rff "propose-t${t}-result.json" \
-              -wi 3 -w 5s -i 5 -r 10s -f 1 -t "$t"
-          done
+      - name: Run propose throughput & latency benchmark
+        run: >-
+          java -jar raft-benchmark/target/raft-benchmark.jar
+          RaftProposeBenchmark
+          -rf json -rff propose-result.json
+          -wi 3 -w 5s -i 5 -r 10s -f 1 -t 1
 
       - name: Run linearizable read benchmark
         run: >-
@@ -65,12 +65,20 @@ jobs:
           -rf json -rff read-result.json
           -wi 3 -w 5s -i 5 -r 10s -f 1 -t 1
 
+      - name: Run capacity sweep (propose + read)
+        run: >-
+          java -cp raft-benchmark/target/raft-benchmark.jar
+          io.github.xinfra.lab.raft.benchmark.RaftCapacityBenchmark
+          -o capacity-result.json
+
       - name: Merge results
         run: |
           python3 -c "
           import json, glob
           merged = []
           for f in sorted(glob.glob('*-result.json')):
+              if f == 'capacity-result.json':
+                  continue
               with open(f) as fh:
                   merged.extend(json.load(fh))
           with open('benchmark-result.json', 'w') as out:
@@ -223,27 +231,358 @@ jobs:
 
           python3 parse_results.py >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Ensure gh-pages branch exists
+      - name: Generate benchmark dashboard
         run: |
-          if ! git ls-remote --exit-code origin gh-pages > /dev/null 2>&1; then
-            echo "Creating gh-pages branch"
-            git switch --orphan gh-pages
-            git commit --allow-empty -m "Initial gh-pages branch"
-            git push origin gh-pages
-            git switch -
-          fi
+          mkdir -p dashboard
+          touch dashboard/.nojekyll
+          cat <<'PYEOF' > gen_dashboard.py
+          import json, sys, time, os
 
-      - name: Store benchmark result
-        uses: benchmark-action/github-action-benchmark@v1
+          with open(sys.argv[1]) as f:
+              results = json.load(f)
+
+          cap_data = None
+          cap_file = "capacity-result.json"
+          if os.path.exists(cap_file):
+              with open(cap_file) as f:
+                  cap_data = json.load(f)
+
+          def fmt_bytes(s):
+              n = int(s) if isinstance(s, str) else s
+              if n == 0: return "0B"
+              if n < 1024: return f"{n}B"
+              return f"{n//1024}KB"
+
+          core, propose_thrpt, propose_latency = [], [], []
+          read_thrpt, read_latency = [], []
+
+          for r in results:
+              method = r["benchmark"].split(".")[-1]
+              mode = r["mode"]
+              if method in ("committedIndex", "leaderHandleAppendResponse",
+                            "proposeAndDrain", "readyUnderLoad"):
+                  core.append(r)
+              elif method in ("syncPropose", "asyncPropose"):
+                  (propose_thrpt if mode == "thrpt" else propose_latency).append(r)
+              elif method in ("syncRead", "asyncRead"):
+                  (read_thrpt if mode == "thrpt" else read_latency).append(r)
+
+          def sort_propose(lst):
+              return sorted(lst, key=lambda r: (
+                  r["benchmark"].split(".")[-1],
+                  int(r.get("params", {}).get("payloadSize", "0")),
+                  r.get("threads", 1)))
+
+          def sort_read(lst):
+              return sorted(lst, key=lambda r: (
+                  r["benchmark"].split(".")[-1],
+                  int(r.get("params", {}).get("proposeQps", "0"))))
+
+          # Build chart data for propose throughput
+          thrpt_series = {}
+          for r in sort_propose(propose_thrpt):
+              method = r["benchmark"].split(".")[-1]
+              payload = fmt_bytes(r.get("params", {}).get("payloadSize", "0"))
+              key = f"{method} ({payload})"
+              t = r.get("threads", 1)
+              s = r["primaryMetric"]["score"]
+              thrpt_series.setdefault(key, []).append({"t": t, "s": round(s, 1)})
+
+          read_thrpt_series = {}
+          for r in sort_read(read_thrpt):
+              method = r["benchmark"].split(".")[-1]
+              qps = int(r.get("params", {}).get("proposeQps", "0"))
+              s = r["primaryMetric"]["score"]
+              read_thrpt_series.setdefault(method, []).append({"qps": qps, "s": round(s, 1)})
+
+          COLORS = ["#3273dc", "#ff6384", "#36a2eb", "#ffce56", "#4bc0c0",
+                    "#9966ff", "#ff9f40", "#c9cbcf", "#e74c3c", "#2ecc71"]
+
+          timestamp = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+          sha = sys.argv[2] if len(sys.argv) > 2 else "unknown"
+
+          out = []
+          out.append(f"""<!DOCTYPE html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8"/>
+          <meta name="viewport" content="width=device-width,initial-scale=1"/>
+          <title>Raft Benchmark Results</title>
+          <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+          <style>
+          * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+          body {{ font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+                 color: #24292f; background: #f6f8fa; padding: 24px; }}
+          h1 {{ font-size: 1.8rem; margin-bottom: 4px; }}
+          .subtitle {{ color: #57606a; margin-bottom: 24px; font-size: 0.9rem; }}
+          h2 {{ font-size: 1.3rem; margin: 32px 0 12px; padding-bottom: 8px;
+                border-bottom: 1px solid #d0d7de; }}
+          table {{ border-collapse: collapse; width: 100%; margin-bottom: 16px;
+                   background: #fff; border-radius: 6px; overflow: hidden;
+                   box-shadow: 0 1px 3px rgba(0,0,0,0.08); }}
+          th {{ background: #f6f8fa; text-align: left; padding: 8px 12px;
+                font-size: 0.85rem; color: #57606a; border-bottom: 2px solid #d0d7de; }}
+          td {{ padding: 6px 12px; border-bottom: 1px solid #eaeef2; font-size: 0.9rem; }}
+          tr:last-child td {{ border-bottom: none; }}
+          td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+          .charts {{ display: flex; flex-wrap: wrap; gap: 24px; margin: 16px 0; }}
+          .chart-box {{ background: #fff; border-radius: 6px; padding: 16px;
+                        box-shadow: 0 1px 3px rgba(0,0,0,0.08); flex: 1;
+                        min-width: 420px; max-width: 600px; }}
+          .chart-box h3 {{ font-size: 1rem; margin-bottom: 8px; text-align: center; }}
+          canvas {{ width: 100% !important; }}
+          .section {{ margin-bottom: 40px; }}
+          </style>
+          </head>
+          <body>
+          <h1>Raft Benchmark Results</h1>
+          <p class="subtitle">{timestamp} &nbsp;|&nbsp; commit: {sha[:8]}
+          &nbsp;|&nbsp; <a href="https://github.com/x-infra-lab/x-raft-lib">x-infra-lab/x-raft-lib</a></p>
+          """)
+
+          # Core
+          if core:
+              out.append('<div class="section"><h2>Core Micro-Benchmarks</h2>')
+              out.append('<table><tr><th>Benchmark</th><th>Voters</th><th>Payload</th>'
+                  '<th style="text-align:right">Score</th>'
+                  '<th style="text-align:right">± Error</th><th>Unit</th></tr>')
+              for r in sorted(core, key=lambda x: (
+                  x["benchmark"].split(".")[-1],
+                  int(x.get("params", {}).get("voters",
+                      x.get("params", {}).get("voterCount", "0"))),
+                  int(x.get("params", {}).get("payloadBytes", "0")))):
+                  name = r["benchmark"].split(".")[-1]
+                  p = r.get("params", {})
+                  voters = p.get("voters", p.get("voterCount", "-"))
+                  pb = p.get("payloadBytes")
+                  payload = fmt_bytes(pb) if pb else "-"
+                  score = r["primaryMetric"]["score"]
+                  error = r["primaryMetric"]["scoreError"]
+                  unit = r["primaryMetric"].get("scoreUnit", "")
+                  out.append(f'<tr><td>{name}</td><td class="num">{voters}</td>'
+                      f'<td class="num">{payload}</td><td class="num">{score:,.2f}</td>'
+                      f'<td class="num">±{error:,.2f}</td><td>{unit}</td></tr>')
+              out.append('</table></div>')
+
+          # Propose Throughput
+          if propose_thrpt:
+              out.append('<div class="section"><h2>Propose Throughput</h2>')
+              out.append('<table><tr><th>Method</th><th>Payload</th><th>Threads</th>'
+                  '<th style="text-align:right">Ops/ms</th>'
+                  '<th style="text-align:right">± Error</th></tr>')
+              for r in sort_propose(propose_thrpt):
+                  name = r["benchmark"].split(".")[-1]
+                  payload = fmt_bytes(r.get("params", {}).get("payloadSize", "0"))
+                  threads = r.get("threads", 1)
+                  score = r["primaryMetric"]["score"]
+                  error = r["primaryMetric"]["scoreError"]
+                  out.append(f'<tr><td>{name}</td><td class="num">{payload}</td>'
+                      f'<td class="num">{threads}</td><td class="num">{score:,.1f}</td>'
+                      f'<td class="num">±{error:,.1f}</td></tr>')
+              out.append('</table><div class="charts">')
+              for i, (label, points) in enumerate(thrpt_series.items()):
+                  cid = f"thrpt_{i}"
+                  ljs = json.dumps([f"t={p['t']}" for p in points])
+                  djs = json.dumps([p["s"] for p in points])
+                  c = COLORS[i % len(COLORS)]
+                  out.append(f'<div class="chart-box"><h3>{label}</h3>'
+                      f'<canvas id="{cid}"></canvas><script>'
+                      f"new Chart(document.getElementById('{cid}'),{{type:'bar',"
+                      f"data:{{labels:{ljs},datasets:[{{label:'ops/ms',data:{djs},"
+                      f"backgroundColor:'{c}80',borderColor:'{c}',borderWidth:1}}]}},"
+                      f"options:{{responsive:true,plugins:{{legend:{{display:false}}}},"
+                      f"scales:{{y:{{beginAtZero:true,title:{{display:true,text:'ops/ms'}}}}}}}}}});"
+                      f'</script></div>')
+              out.append('</div></div>')
+
+          # Propose Latency
+          if propose_latency:
+              out.append('<div class="section"><h2>Propose Latency Percentiles</h2>')
+              out.append('<table><tr><th>Method</th><th>Payload</th><th>Threads</th>'
+                  '<th style="text-align:right">p50</th><th style="text-align:right">p90</th>'
+                  '<th style="text-align:right">p99</th>'
+                  '<th style="text-align:right">p99.9</th><th>Unit</th></tr>')
+              for r in sort_propose(propose_latency):
+                  name = r["benchmark"].split(".")[-1]
+                  payload = fmt_bytes(r.get("params", {}).get("payloadSize", "0"))
+                  threads = r.get("threads", 1)
+                  pcts = r["primaryMetric"].get("scorePercentiles", {})
+                  unit = r["primaryMetric"].get("scoreUnit", "ms/op")
+                  out.append(f'<tr><td>{name}</td><td class="num">{payload}</td>'
+                      f'<td class="num">{threads}</td>'
+                      f'<td class="num">{pcts.get("50.0", 0):.3f}</td>'
+                      f'<td class="num">{pcts.get("90.0", 0):.3f}</td>'
+                      f'<td class="num">{pcts.get("99.0", 0):.3f}</td>'
+                      f'<td class="num">{pcts.get("99.9", 0):.3f}</td>'
+                      f'<td>{unit}</td></tr>')
+              out.append('</table></div>')
+
+          # Read Throughput
+          if read_thrpt:
+              out.append('<div class="section"><h2>Read Throughput (under write load)</h2>')
+              out.append('<table><tr><th>Method</th><th>Write QPS</th>'
+                  '<th style="text-align:right">Ops/ms</th>'
+                  '<th style="text-align:right">± Error</th></tr>')
+              for r in sort_read(read_thrpt):
+                  name = r["benchmark"].split(".")[-1]
+                  qps = r.get("params", {}).get("proposeQps", "0")
+                  score = r["primaryMetric"]["score"]
+                  error = r["primaryMetric"]["scoreError"]
+                  out.append(f'<tr><td>{name}</td><td class="num">{qps}</td>'
+                      f'<td class="num">{score:,.1f}</td>'
+                      f'<td class="num">±{error:,.1f}</td></tr>')
+              out.append('</table><div class="charts">')
+              for i, (method, points) in enumerate(read_thrpt_series.items()):
+                  cid = f"read_{i}"
+                  ljs = json.dumps([f"{p['qps']}qps" for p in points])
+                  djs = json.dumps([p["s"] for p in points])
+                  c = COLORS[i % len(COLORS)]
+                  out.append(f'<div class="chart-box"><h3>{method} vs Write Load</h3>'
+                      f'<canvas id="{cid}"></canvas><script>'
+                      f"new Chart(document.getElementById('{cid}'),{{type:'bar',"
+                      f"data:{{labels:{ljs},datasets:[{{label:'ops/ms',data:{djs},"
+                      f"backgroundColor:'{c}80',borderColor:'{c}',borderWidth:1}}]}},"
+                      f"options:{{responsive:true,plugins:{{legend:{{display:false}}}},"
+                      f"scales:{{y:{{beginAtZero:true,title:{{display:true,text:'ops/ms'}}}}}}}}}});"
+                      f'</script></div>')
+              out.append('</div></div>')
+
+          # Read Latency
+          if read_latency:
+              out.append('<div class="section"><h2>Read Latency Percentiles (under write load)</h2>')
+              out.append('<table><tr><th>Method</th><th>Write QPS</th>'
+                  '<th style="text-align:right">p50</th><th style="text-align:right">p90</th>'
+                  '<th style="text-align:right">p99</th>'
+                  '<th style="text-align:right">p99.9</th><th>Unit</th></tr>')
+              for r in sort_read(read_latency):
+                  name = r["benchmark"].split(".")[-1]
+                  qps = r.get("params", {}).get("proposeQps", "0")
+                  pcts = r["primaryMetric"].get("scorePercentiles", {})
+                  unit = r["primaryMetric"].get("scoreUnit", "ms/op")
+                  out.append(f'<tr><td>{name}</td><td class="num">{qps}</td>'
+                      f'<td class="num">{pcts.get("50.0", 0):.3f}</td>'
+                      f'<td class="num">{pcts.get("90.0", 0):.3f}</td>'
+                      f'<td class="num">{pcts.get("99.0", 0):.3f}</td>'
+                      f'<td class="num">{pcts.get("99.9", 0):.3f}</td>'
+                      f'<td>{unit}</td></tr>')
+              out.append('</table></div>')
+
+          # Capacity Sweep
+          if cap_data:
+              cap_propose = cap_data.get("propose", [])
+              cap_read = cap_data.get("read", [])
+
+              if cap_propose:
+                  out.append('<div class="section"><h2>Propose Capacity Sweep</h2>')
+                  out.append('<table><tr><th>Payload</th><th>Target</th>'
+                      '<th style="text-align:right">Actual</th>'
+                      '<th style="text-align:right">Success</th>'
+                      '<th style="text-align:right">Errors</th>'
+                      '<th style="text-align:right">p50(us)</th>'
+                      '<th style="text-align:right">p99(us)</th>'
+                      '<th style="text-align:right">p99.9(us)</th>'
+                      '<th style="text-align:right">ErrRate</th></tr>')
+                  for r in cap_propose:
+                      errs = r["errorCount"] + r["timeoutCount"]
+                      erate = r["errorRate"] * 100
+                      cls = ' style="color:#e74c3c"' if erate > 5 else ""
+                      out.append(f'<tr><td>{fmt_bytes(r["payloadSize"])}</td>'
+                          f'<td class="num">{r["targetRate"]}</td>'
+                          f'<td class="num">{r["actualRate"]:.0f}</td>'
+                          f'<td class="num">{r["successCount"]}</td>'
+                          f'<td class="num"{cls}>{errs}</td>'
+                          f'<td class="num">{r["p50Us"]}</td>'
+                          f'<td class="num">{r["p99Us"]}</td>'
+                          f'<td class="num">{r["p999Us"]}</td>'
+                          f'<td class="num"{cls}>{erate:.1f}%</td></tr>')
+                  out.append('</table>')
+
+                  # Charts: one per payload — x=target rate, y=actual throughput + p99
+                  payloads = {}
+                  for r in cap_propose:
+                      payloads.setdefault(r["payloadSize"], []).append(r)
+                  out.append('<div class="charts">')
+                  for i, (ps, rows) in enumerate(payloads.items()):
+                      cid = f"cap_propose_{i}"
+                      labels = json.dumps([str(r["targetRate"]) for r in rows])
+                      actual = json.dumps([round(r["actualRate"]) for r in rows])
+                      p99 = json.dumps([round(r["p99Us"] / 1000, 1) for r in rows])
+                      c1 = COLORS[i % len(COLORS)]
+                      c2 = COLORS[(i + 3) % len(COLORS)]
+                      out.append(f'<div class="chart-box"><h3>Propose {fmt_bytes(ps)}</h3>'
+                          f'<canvas id="{cid}"></canvas><script>'
+                          f"new Chart(document.getElementById('{cid}'),{{type:'line',"
+                          f"data:{{labels:{labels},"
+                          f"datasets:["
+                          f"{{label:'Actual ops/s',data:{actual},borderColor:'{c1}',backgroundColor:'{c1}40',yAxisID:'y',tension:0.2}},"
+                          f"{{label:'p99 (ms)',data:{p99},borderColor:'{c2}',backgroundColor:'{c2}40',yAxisID:'y1',borderDash:[5,5],tension:0.2}}"
+                          f"]}},"
+                          f"options:{{responsive:true,"
+                          f"scales:{{x:{{title:{{display:true,text:'Target rate (ops/s)'}}}},"
+                          f"y:{{type:'linear',position:'left',beginAtZero:true,title:{{display:true,text:'Actual ops/s'}}}},"
+                          f"y1:{{type:'linear',position:'right',beginAtZero:true,title:{{display:true,text:'p99 latency (ms)'}},grid:{{drawOnChartArea:false}}}}}}}}}});"
+                          f'</script></div>')
+                  out.append('</div></div>')
+
+              if cap_read:
+                  out.append('<div class="section"><h2>Read Capacity Sweep</h2>')
+                  out.append('<table><tr><th>Target</th>'
+                      '<th style="text-align:right">Actual</th>'
+                      '<th style="text-align:right">Success</th>'
+                      '<th style="text-align:right">Errors</th>'
+                      '<th style="text-align:right">p50(us)</th>'
+                      '<th style="text-align:right">p99(us)</th>'
+                      '<th style="text-align:right">p99.9(us)</th>'
+                      '<th style="text-align:right">ErrRate</th></tr>')
+                  for r in cap_read:
+                      errs = r["errorCount"] + r["timeoutCount"]
+                      erate = r["errorRate"] * 100
+                      cls = ' style="color:#e74c3c"' if erate > 5 else ""
+                      out.append(f'<tr><td class="num">{r["targetRate"]}</td>'
+                          f'<td class="num">{r["actualRate"]:.0f}</td>'
+                          f'<td class="num">{r["successCount"]}</td>'
+                          f'<td class="num"{cls}>{errs}</td>'
+                          f'<td class="num">{r["p50Us"]}</td>'
+                          f'<td class="num">{r["p99Us"]}</td>'
+                          f'<td class="num">{r["p999Us"]}</td>'
+                          f'<td class="num"{cls}>{erate:.1f}%</td></tr>')
+                  out.append('</table>')
+                  cid = "cap_read"
+                  labels = json.dumps([str(r["targetRate"]) for r in cap_read])
+                  actual = json.dumps([round(r["actualRate"]) for r in cap_read])
+                  p99 = json.dumps([round(r["p99Us"] / 1000, 1) for r in cap_read])
+                  out.append(f'<div class="charts"><div class="chart-box"><h3>Read Capacity</h3>'
+                      f'<canvas id="{cid}"></canvas><script>'
+                      f"new Chart(document.getElementById('{cid}'),{{type:'line',"
+                      f"data:{{labels:{labels},"
+                      f"datasets:["
+                      f"{{label:'Actual ops/s',data:{actual},borderColor:'#3273dc',backgroundColor:'#3273dc40',yAxisID:'y',tension:0.2}},"
+                      f"{{label:'p99 (ms)',data:{p99},borderColor:'#ff6384',backgroundColor:'#ff638440',yAxisID:'y1',borderDash:[5,5],tension:0.2}}"
+                      f"]}},"
+                      f"options:{{responsive:true,"
+                      f"scales:{{x:{{title:{{display:true,text:'Target rate (ops/s)'}}}},"
+                      f"y:{{type:'linear',position:'left',beginAtZero:true,title:{{display:true,text:'Actual ops/s'}}}},"
+                      f"y1:{{type:'linear',position:'right',beginAtZero:true,title:{{display:true,text:'p99 latency (ms)'}},grid:{{drawOnChartArea:false}}}}}}}}}});"
+                      f'</script></div></div></div>')
+
+          out.append('</body></html>')
+
+          with open("dashboard/index.html", "w") as f:
+              f.write("\n".join(out))
+          cap_count = 0
+          if cap_data:
+              cap_count = len(cap_data.get("propose", [])) + len(cap_data.get("read", []))
+          print(f"Dashboard generated: {len(results)} JMH + {cap_count} capacity benchmarks")
+          PYEOF
+
+          python3 gen_dashboard.py benchmark-result.json "$GITHUB_SHA"
+
+      - name: Deploy dashboard to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          name: Raft KV Benchmark
-          tool: jmh
-          output-file-path: benchmark-result.json
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: true
-          alert-threshold: '150%'
-          comment-on-alert: true
-          fail-on-alert: false
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dashboard
+          force_orphan: true
 
       - name: Upload benchmark results
         if: always()
@@ -253,7 +592,8 @@ jobs:
           path: |
             benchmark-result.json
             core-result.json
-            propose-t*-result.json
+            propose-result.json
             read-result.json
+            capacity-result.json
           retention-days: 30
           if-no-files-found: ignore

@@ -30,11 +30,21 @@ public final class KvServer implements AutoCloseable {
     private final Server grpcServer;
 
     public KvServer(long nodeId, int raftPort, int kvPort, Path dataDir,
-                    Map<Long, String> peerAddresses, boolean bootstrap) throws Exception {
+                    Map<Long, String> peerAddresses, boolean bootstrap,
+                    boolean snapshotStreaming, boolean asyncStorageWrites) throws Exception {
+        this(nodeId, raftPort, kvPort, dataDir, peerAddresses, bootstrap,
+                snapshotStreaming, asyncStorageWrites, 10_000);
+    }
+
+    public KvServer(long nodeId, int raftPort, int kvPort, Path dataDir,
+                    Map<Long, String> peerAddresses, boolean bootstrap,
+                    boolean snapshotStreaming, boolean asyncStorageWrites,
+                    long snapshotThreshold) throws Exception {
         GrpcTransport transport = new GrpcTransport(nodeId, raftPort);
         this.raftKvNode = new RaftKVNode(
                 nodeId, dataDir.resolve("raft"), dataDir.resolve("kv"),
-                peerAddresses, bootstrap, transport);
+                peerAddresses, bootstrap, transport, snapshotStreaming,
+                asyncStorageWrites, snapshotThreshold);
 
         this.grpcServer = ServerBuilder.forPort(kvPort)
                 .addService(new KvServiceImpl(this))
@@ -42,7 +52,7 @@ public final class KvServer implements AutoCloseable {
                 .build()
                 .start();
 
-        raftKvNode.onRemoved().thenRun(this::close);
+        raftKvNode.onRemoved().thenRunAsync(this::close);
 
         LOG.info("KvServer node {} started: raft={}, kv={}", nodeId, raftPort, kvPort);
     }
@@ -90,6 +100,21 @@ public final class KvServer implements AutoCloseable {
 
         return raftKvNode.proposeConfChangeWithFuture(cc, null)
                 .<Void>thenApply(cs -> null);
+    }
+
+    public CompletableFuture<Eraftpb.ConfState> replaceNode(long removeNodeId, long addNodeId, String addAddress) {
+        Eraftpb.ConfChangeV2 cc = Eraftpb.ConfChangeV2.newBuilder()
+                .addChanges(Eraftpb.ConfChangeSingle.newBuilder()
+                        .setType(Eraftpb.ConfChangeType.ConfChangeRemoveNode)
+                        .setNodeId(removeNodeId))
+                .addChanges(Eraftpb.ConfChangeSingle.newBuilder()
+                        .setType(Eraftpb.ConfChangeType.ConfChangeAddNode)
+                        .setNodeId(addNodeId))
+                .build();
+
+        raftKvNode.registerPeerAddress(addNodeId, addAddress);
+
+        return raftKvNode.proposeConfChangeWithFuture(cc, addAddress);
     }
 
     public void transferLeader(long transferee) throws InterruptedException {

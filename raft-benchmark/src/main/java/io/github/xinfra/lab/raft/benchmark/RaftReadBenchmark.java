@@ -87,7 +87,7 @@ public class RaftReadBenchmark {
                 long id = i + 1;
                 Path dir = tmpDir.resolve("node-" + id);
                 Files.createDirectories(dir);
-                servers[i] = new KvServer(id, raftPorts[i], kvPorts[i], dir, peers, true);
+                servers[i] = new KvServer(id, raftPorts[i], kvPorts[i], dir, peers, true, true, true);
             }
 
             leader = RaftProposeBenchmark.waitForLeader(servers, 30_000);
