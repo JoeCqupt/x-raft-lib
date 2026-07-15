@@ -8,6 +8,38 @@ once it reaches `1.0.0`. Pre-`1.0` releases may break compatibility.
 
 ## [Unreleased]
 
+## [0.1.0-RC2] - 2026-07-15
+
+### Added
+
+#### `raft-benchmark` — New Module
+
+- **JMH 基准测试模块** — 新增 `raft-benchmark` 模块，包含 propose 吞吐量、
+  容量扫描（capacity sweep）、并发度扫描（concurrency sweep）等基准测试。
+  使用异步管线 + semaphore 背压模型，真实测量 raft pipeline 端到端性能。
+
+#### `raft-core` — DefaultNode
+
+- **事件循环 drain 模型** — 引入 drain 模式最大化 group commit 批处理，
+  在单次 Ready 周期内聚合尽可能多的 pending events，减少 fsync 次数。
+
+- **rate-limited proposal-rejection 日志** — 新增速率限制的 propose 拒绝
+  日志，避免高负载下日志洪泛。
+
+#### `raft-examples` — RaftKVNode
+
+- **异步存储写入（三线程模型）** — 新增 `persistExecutor` 和 `applyExecutor`
+  分离持久化与应用，event loop 线程不再阻塞在 IO 上。支持
+  `MsgStorageAppend` / `MsgStorageApply` 异步处理路径。
+
+- **production-quality KV server** — 从原 `RaftPeer` scaffold 重写为完整的
+  分布式 KV 系统，支持动态成员变更、joint consensus、snapshot、gRPC API。
+
+#### `raft-tests`
+
+- **集成测试扩展** — 新增 restart、leader transfer、conf change crash、
+  election soak 等集成测试。原 `raft-simulation` 模块合并至 `raft-tests`。
+
 ### Fixed
 
 #### `raft-transport-grpc` — GrpcTransport
@@ -75,7 +107,47 @@ once it reaches `1.0.0`. Pre-`1.0` releases may break compatibility.
   **影响范围：** `GrpcTransport.java` — `send()` 方法；
   `GrpcTransportLifecycleTest.java` — 断言修改。
 
+- **修复 gRPC channel 泄漏和 close() 竞态 (P1)**
+
+  `GrpcTransport.close()` 与并发 `send()` 存在竞态条件，可能导致已关闭的
+  channel 上继续发送消息，或 channel 引用泄漏不被 shutdown。
+
+#### `raft-core` — DefaultNode
+
+- **`step()` 改为非阻塞，防止 gRPC 线程饥饿 (P0)**
+
+  原 `step()` 使用 `put()` 阻塞式入队，当 events queue 满时 gRPC 接收线程
+  被阻塞，导致心跳处理延迟 → 选举超时。改为非阻塞 `offer()` + 拒绝时返回
+  错误。
+
+- **修复 `advance()` 队列饥饿和 election-soak 定时断言 (P0)**
+
+  事件循环在 `waitingAdvance` 状态下持续 drain 新事件，导致 `advance()`
+  信号被饿死。修复：在 `waitingAdvance` 期间跳过事件 drain。
+
+- **cap event drain loop，防止节点饥饿 (P1)**
+
+  无限制的 drain 循环在高负载下可能导致 Ready 发射延迟无限增大。
+  增加 drain 循环上限（默认 256 events/iteration）并跳过空 `writeBatched`。
+
+- **`RecvEvent` 使用 blocking `put()` 启用背压 (P1)**
+
+  原 `offer()` 在队列满时静默丢弃消息，导致日志复制丢失。改为 `put()`
+  配合有界队列实现发送端背压。
+
 #### `raft-storage-rocksdb` — RocksDbStorage
+
+- **修复 snapshot metadata 覆写和 cachedFirstIndex 回退 (P1)**
+
+  `applySnapshot()` 在某些路径下会意外覆写已有的 snapshot metadata，
+  且 `cachedFirstIndex` 未随 compact 正确更新，导致 `firstIndex()` 返回
+  已被截断的索引。
+
+- **`lastIndex` / `firstIndex` 无锁化（volatile cache）(perf)**
+
+  将 `lastIndex()` 和 `firstIndex()` 从 synchronized 读改为 volatile 字段
+  缓存，消除读路径上的锁竞争。写入路径在 `writeBatched` / `compact` 中
+  原子更新缓存值。
 
 - **修复 JNI 原生内存泄漏：`ColumnFamilyOptions` 和 `DBOptions` (P1)**
 
@@ -187,7 +259,22 @@ once it reaches `1.0.0`. Pre-`1.0` releases may break compatibility.
 
 ### Changed
 
+#### `raft-core` — DefaultNode
+
+- **事件循环重构为 single-event-per-iteration 模型**
+
+  简化事件循环为单事件处理模型，修复 advance/campaign 竞态条件。
+  引入可配置的 drain 上限，平衡吞吐量和延迟。
+
+#### `raft-storage-rocksdb` — RocksDbStorage
+
+- **移除 debug lock instrumentation** — 移除用于诊断 soak 测试中
+  13s+ 写入延迟的临时锁竞争追踪代码（`lockHolder`、`lockHeldSince`、
+  `enterLock`/`exitLock`），保留无锁 volatile cache 作为正式优化。
+
 #### `raft-examples` — RaftKVNode / KvServer / KvServerBootstrap
+
+- **`RaftPeer` 重命名为 `RaftKVNode`，轮询改为回调驱动 Ready 循环**
 
 - **快照阈值从硬编码常量改为构造器参数**
 
@@ -237,12 +324,23 @@ once it reaches `1.0.0`. Pre-`1.0` releases may break compatibility.
     joint consensus 完成后生成包含 node 5 的新 snapshot——raft 核心会
     拒绝 ConfState 中不包含目标节点的 snapshot，这是该阶段能通过的关键。
 
+### Dependencies
+
+- `org.rocksdb:rocksdbjni` 10.10.1 → 10.10.1.1
+- `org.apache.maven.plugins:maven-compiler-plugin` 升级
+- `org.apache.maven.plugins:maven-enforcer-plugin` 升级
+- `org.jacoco:jacoco-maven-plugin` 0.8.14 → 0.8.15
+- `codecov/codecov-action` 4 → 7
+- `softprops/action-gh-release` 2 → 3
+- JUnit/AssertJ/jqwik test-tooling 批量升级
+
 ### Docs
 
-- **`CHANGELOG.md`** — 新增 `[Unreleased]` 条目，详细记录所有修复和变更。
 - **`docs/code-qa.zh.md`** — Q26 更新快照触发条件为可配置的
   `snapshotThreshold` 参数；Q27 更新传输细节——快照发送使用独立
   `snapshotExecutor` 线程池，新增 inline 模式 `reportSnapshot` 说明。
+- **`docs/raft-node-layers.md`** / **`docs/snapshot-flow.md`** — 新增架构文档。
+- **`docs/async-storage-writes.md`** — 新增异步存储写入设计文档。
 
 ## [0.1.0-RC1] - 2026-06-02
 
