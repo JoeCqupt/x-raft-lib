@@ -226,13 +226,6 @@ public class RaftKVNode implements AutoCloseable {
         return future;
     }
 
-    public void registerPeerAddress(long nodeId, String address) {
-        peerAddresses.put(nodeId, address);
-        if (nodeId != id) {
-            transport.addPeer(nodeId, address);
-        }
-    }
-
     public String getPeerAddress(long nodeId) {
         return peerAddresses.get(nodeId);
     }
