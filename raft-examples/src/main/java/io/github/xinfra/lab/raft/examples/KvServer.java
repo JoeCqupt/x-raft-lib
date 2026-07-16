@@ -85,8 +85,6 @@ public final class KvServer implements AutoCloseable {
                         .setNodeId(addNodeId))
                 .build();
 
-        raftKvNode.registerPeerAddress(addNodeId, address);
-
         return raftKvNode.proposeConfChangeWithFuture(cc, address)
                 .<Void>thenApply(cs -> null);
     }
@@ -111,8 +109,6 @@ public final class KvServer implements AutoCloseable {
                         .setType(Eraftpb.ConfChangeType.ConfChangeAddNode)
                         .setNodeId(addNodeId))
                 .build();
-
-        raftKvNode.registerPeerAddress(addNodeId, addAddress);
 
         return raftKvNode.proposeConfChangeWithFuture(cc, addAddress);
     }
