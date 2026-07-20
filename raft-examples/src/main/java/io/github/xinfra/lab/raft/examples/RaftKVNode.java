@@ -22,6 +22,7 @@ import io.github.xinfra.lab.raft.storage.rocksdb.RocksDbStorage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -339,16 +340,7 @@ public class RaftKVNode implements AutoCloseable {
         // 2. Send messages.
         if (rd.messages() != null) {
             for (Eraftpb.Message m : rd.messages()) {
-                if (m.getTo() == id) continue;
-                if (m.getMsgType() == Eraftpb.MessageType.MsgSnapshot) {
-                    if (snapshotStreaming) {
-                        sendSnapshotOutOfBand(m);
-                    } else {
-                        sendSnapshotInline(m);
-                    }
-                } else {
-                    transport.send(m.getTo(), m);
-                }
+                sendPeerMessage(m);
             }
         }
 
@@ -508,13 +500,14 @@ public class RaftKVNode implements AutoCloseable {
 
     private void sendPeerMessage(Eraftpb.Message m) {
         if (m.getTo() == id) return;
-        if (snapshotStreaming && m.getMsgType() == Eraftpb.MessageType.MsgSnapshot) {
-            sendSnapshotOutOfBand(m);
+        if (m.getMsgType() == Eraftpb.MessageType.MsgSnapshot) {
+            if (snapshotStreaming) {
+                sendSnapshotOutOfBand(m);
+            } else {
+                sendSnapshotInline(m);
+            }
         } else {
             transport.send(m.getTo(), m);
-            if (m.getMsgType() == Eraftpb.MessageType.MsgSnapshot) {
-                node.reportSnapshot(m.getTo(), SnapshotStatus.SnapshotFinish);
-            }
         }
     }
 
@@ -698,31 +691,47 @@ public class RaftKVNode implements AutoCloseable {
     }
 
     /**
-     * Inline snapshot send with completion reporting. The payload already sits
-     * inside {@code m}'s snapshot data, so it goes over the normal (reliable)
-     * {@code transport.send} channel. Unlike a plain message send, we always
-     * report the outcome back to the core so the leader's Progress leaves
-     * {@code StateSnapshot}: without this, a {@code MsgSnapshot} lost on a
-     * broken connection would strand the follower in {@code StateSnapshot}
-     * indefinitely (heartbeat-driven appends stay paused there).
+     * Inline snapshot send with completion reporting based on the ACTUAL send
+     * outcome. The payload already sits inside {@code m}'s snapshot data, so we
+     * hand the transport a metadata-only envelope plus the payload as a stream
+     * and report the leader's Progress transition from the terminal callback.
      *
-     * <p>{@code transport.send} is fire-and-forget, so success here means
-     * "submitted", not "delivered": if the snapshot never arrives, the follower
-     * stays behind, the subsequent probe append is rejected, and the leader
-     * re-sends the snapshot — a self-healing loop. On a submit-time exception we
-     * report {@link SnapshotStatus#SnapshotFailure} so the leader retries after
-     * a heartbeat interval.
+     * <p>Previously this path used {@code transport.send} + an immediate
+     * {@code reportSnapshot(SnapshotFinish)}. But {@code transport.send} is
+     * fire-and-forget and never throws on a delivery failure, so it always
+     * reported {@code SnapshotFinish} regardless of the real result — the status
+     * was effectively "dumb". Routing through {@link Transport#sendSnapshot}
+     * instead lets the transport report the true outcome: on {@code GrpcTransport}
+     * it waits for the peer's terminal Ack over the {@code installSnapshot}
+     * client-streaming RPC and fires {@code onComplete(ok)} accordingly; on a
+     * transport that only has the default {@code sendSnapshot} it materializes
+     * and forwards via {@code send} (no worse than before).
+     *
+     * <p>The wire framing is identical to the old path (both clear
+     * {@code snapshot.data} into a metadata envelope and chunk the payload), so
+     * receivers — streaming or not — stay compatible: a peer without a
+     * {@code SnapshotSink} reassembles the full {@code MsgSnapshot} and routes it
+     * through the normal {@code MessageReceiver}.
+     *
+     * <p>Reporting the real status matters for liveness bookkeeping: a genuine
+     * failure now yields {@link SnapshotStatus#SnapshotFailure} so the leader
+     * retries after a heartbeat interval instead of optimistically assuming the
+     * snapshot landed.
      */
     private void sendSnapshotInline(Eraftpb.Message m) {
         long to = m.getTo();
-        boolean ok = true;
-        try {
-            transport.send(to, m);
-        } catch (RuntimeException e) {
-            ok = false;
-            LOG.warn("inline snapshot send to {} failed: {}", to, e.toString());
-        }
-        node.reportSnapshot(to, ok ? SnapshotStatus.SnapshotFinish : SnapshotStatus.SnapshotFailure);
+        Eraftpb.Snapshot snap = m.getSnapshot();
+        byte[] data = snap.getData().toByteArray();
+        Eraftpb.Message metaMsg = m.toBuilder()
+                .setSnapshot(snap.toBuilder().clearData().build())
+                .build();
+        transport.sendSnapshot(to, metaMsg, new ByteArrayInputStream(data), (ok, err) -> {
+            if (!ok) {
+                LOG.warn("inline snapshot send to {} failed: {}", to,
+                        err == null ? "unknown" : err.toString());
+            }
+            node.reportSnapshot(to, ok ? SnapshotStatus.SnapshotFinish : SnapshotStatus.SnapshotFailure);
+        });
     }
 
     private void drainPendingFutures() {
