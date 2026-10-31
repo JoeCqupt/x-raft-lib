@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Raft Benchmark Results</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       color: #24292f; background: #f6f8fa; padding: 24px; }
+h1 { font-size: 1.8rem; margin-bottom: 4px; }
+.subtitle { color: #57606a; margin-bottom: 24px; font-size: 0.9rem; }
+h2 { font-size: 1.3rem; margin: 32px 0 12px; padding-bottom: 8px;
+      border-bottom: 1px solid #d0d7de; }
+table { border-collapse: collapse; width: 100%; margin-bottom: 16px;
+         background: #fff; border-radius: 6px; overflow: hidden;
+         box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+th { background: #f6f8fa; text-align: left; padding: 8px 12px;
+      font-size: 0.85rem; color: #57606a; border-bottom: 2px solid #d0d7de; }
+td { padding: 6px 12px; border-bottom: 1px solid #eaeef2; font-size: 0.9rem; }
+tr:last-child td { border-bottom: none; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.charts { display: flex; flex-wrap: wrap; gap: 24px; margin: 16px 0; }
+.chart-box { background: #fff; border-radius: 6px; padding: 16px;
+              box-shadow: 0 1px 3px rgba(0,0,0,0.08); flex: 1;
+              min-width: 420px; max-width: 600px; }
+.chart-box h3 { font-size: 1rem; margin-bottom: 8px; text-align: center; }
+canvas { width: 100% !important; }
+.section { margin-bottom: 40px; }
+</style>
+</head>
+<body>
+<h1>Raft Benchmark Results</h1>
+<p class="subtitle">2026-10-31 11:03 UTC &nbsp;|&nbsp; commit: 3d4691f8
+&nbsp;|&nbsp; <a href="https://github.com/x-infra-lab/x-raft-lib">x-infra-lab/x-raft-lib</a></p>
+
+<div class="section"><h2>Core Micro-Benchmarks</h2>
+<table><tr><th>Benchmark</th><th>Voters</th><th>Payload</th><th style="text-align:right">Score</th><th style="text-align:right">± Error</th><th>Unit</th></tr>
+<tr><td>committedIndex</td><td class="num">1</td><td class="num">-</td><td class="num">45.59</td><td class="num">±0.11</td><td>ops/us</td></tr>
+<tr><td>committedIndex</td><td class="num">3</td><td class="num">-</td><td class="num">32.08</td><td class="num">±6.89</td><td>ops/us</td></tr>
+<tr><td>committedIndex</td><td class="num">5</td><td class="num">-</td><td class="num">22.11</td><td class="num">±2.66</td><td>ops/us</td></tr>
+<tr><td>committedIndex</td><td class="num">7</td><td class="num">-</td><td class="num">15.80</td><td class="num">±5.83</td><td>ops/us</td></tr>
+<tr><td>committedIndex</td><td class="num">9</td><td class="num">-</td><td class="num">13.45</td><td class="num">±5.31</td><td>ops/us</td></tr>
+<tr><td>committedIndex</td><td class="num">11</td><td class="num">-</td><td class="num">11.96</td><td class="num">±2.02</td><td>ops/us</td></tr>
+<tr><td>leaderHandleAppendResponse</td><td class="num">3</td><td class="num">0B</td><td class="num">20.98</td><td class="num">±0.70</td><td>ops/us</td></tr>
+<tr><td>leaderHandleAppendResponse</td><td class="num">3</td><td class="num">128B</td><td class="num">21.06</td><td class="num">±0.27</td><td>ops/us</td></tr>
+<tr><td>leaderHandleAppendResponse</td><td class="num">3</td><td class="num">1KB</td><td class="num">21.12</td><td class="num">±0.22</td><td>ops/us</td></tr>
+<tr><td>leaderHandleAppendResponse</td><td class="num">3</td><td class="num">4KB</td><td class="num">20.70</td><td class="num">±1.49</td><td>ops/us</td></tr>
+<tr><td>leaderHandleAppendResponse</td><td class="num">3</td><td class="num">64KB</td><td class="num">21.09</td><td class="num">±0.27</td><td>ops/us</td></tr>
+<tr><td>leaderHandleAppendResponse</td><td class="num">5</td><td class="num">0B</td><td class="num">11.61</td><td class="num">±0.15</td><td>ops/us</td></tr>
+<tr><td>leaderHandleAppendResponse</td><td class="num">5</td><td class="num">128B</td><td class="num">11.54</td><td class="num">±0.45</td><td>ops/us</td></tr>
+<tr><td>leaderHandleAppendResponse</td><td class="num">5</td><td class="num">1KB</td><td class="num">11.63</td><td class="num">±0.49</td><td>ops/us</td></tr>
+<tr><td>leaderHandleAppendResponse</td><td class="num">5</td><td class="num">4KB</td><td class="num">11.71</td><td class="num">±0.47</td><td>ops/us</td></tr>
+<tr><td>leaderHandleAppendResponse</td><td class="num">5</td><td class="num">64KB</td><td class="num">11.82</td><td class="num">±0.16</td><td>ops/us</td></tr>
+</table></div>
+<div class="section"><h2>Propose Throughput</h2>
+<table><tr><th>Method</th><th>Payload</th><th>Threads</th><th style="text-align:right">Ops/ms</th><th style="text-align:right">± Error</th></tr>
+<tr><td>asyncPropose</td><td class="num">128B</td><td class="num">1</td><td class="num">3.6</td><td class="num">±0.9</td></tr>
+<tr><td>asyncPropose</td><td class="num">1KB</td><td class="num">1</td><td class="num">3.0</td><td class="num">±0.2</td></tr>
+<tr><td>asyncPropose</td><td class="num">4KB</td><td class="num">1</td><td class="num">2.2</td><td class="num">±0.4</td></tr>
+<tr><td>asyncPropose</td><td class="num">16KB</td><td class="num">1</td><td class="num">1.5</td><td class="num">±0.1</td></tr>
+<tr><td>asyncPropose</td><td class="num">64KB</td><td class="num">1</td><td class="num">7.6</td><td class="num">±1.5</td></tr>
+<tr><td>syncPropose</td><td class="num">128B</td><td class="num">1</td><td class="num">0.6</td><td class="num">±0.0</td></tr>
+<tr><td>syncPropose</td><td class="num">1KB</td><td class="num">1</td><td class="num">0.6</td><td class="num">±0.0</td></tr>
+<tr><td>syncPropose</td><td class="num">4KB</td><td class="num">1</td><td class="num">0.6</td><td class="num">±0.1</td></tr>
+<tr><td>syncPropose</td><td class="num">16KB</td><td class="num">1</td><td class="num">0.5</td><td class="num">±0.1</td></tr>
+<tr><td>syncPropose</td><td class="num">64KB</td><td class="num">1</td><td class="num">0.4</td><td class="num">±0.0</td></tr>
+</table><div class="charts">
+<div class="chart-box"><h3>asyncPropose (128B)</h3><canvas id="thrpt_0"></canvas><script>new Chart(document.getElementById('thrpt_0'),{type:'bar',data:{labels:["t=1"],datasets:[{label:'ops/ms',data:[3.6],backgroundColor:'#3273dc80',borderColor:'#3273dc',borderWidth:1}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,title:{display:true,text:'ops/ms'}}}}});</script></div>
+<div class="chart-box"><h3>asyncPropose (1KB)</h3><canvas id="thrpt_1"></canvas><script>new Chart(document.getElementById('thrpt_1'),{type:'bar',data:{labels:["t=1"],datasets:[{label:'ops/ms',data:[3.0],backgroundColor:'#ff638480',borderColor:'#ff6384',borderWidth:1}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,title:{display:true,text:'ops/ms'}}}}});</script></div>
+<div class="chart-box"><h3>asyncPropose (4KB)</h3><canvas id="thrpt_2"></canvas><script>new Chart(document.getElementById('thrpt_2'),{type:'bar',data:{labels:["t=1"],datasets:[{label:'ops/ms',data:[2.2],backgroundColor:'#36a2eb80',borderColor:'#36a2eb',borderWidth:1}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,title:{display:true,text:'ops/ms'}}}}});</script></div>
+<div class="chart-box"><h3>asyncPropose (16KB)</h3><canvas id="thrpt_3"></canvas><script>new Chart(document.getElementById('thrpt_3'),{type:'bar',data:{labels:["t=1"],datasets:[{label:'ops/ms',data:[1.5],backgroundColor:'#ffce5680',borderColor:'#ffce56',borderWidth:1}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,title:{display:true,text:'ops/ms'}}}}});</script></div>
+<div class="chart-box"><h3>asyncPropose (64KB)</h3><canvas id="thrpt_4"></canvas><script>new Chart(document.getElementById('thrpt_4'),{type:'bar',data:{labels:["t=1"],datasets:[{label:'ops/ms',data:[7.6],backgroundColor:'#4bc0c080',borderColor:'#4bc0c0',borderWidth:1}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,title:{display:true,text:'ops/ms'}}}}});</script></div>
+<div class="chart-box"><h3>syncPropose (128B)</h3><canvas id="thrpt_5"></canvas><script>new Chart(document.getElementById('thrpt_5'),{type:'bar',data:{labels:["t=1"],datasets:[{label:'ops/ms',data:[0.6],backgroundColor:'#9966ff80',borderColor:'#9966ff',borderWidth:1}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,title:{display:true,text:'ops/ms'}}}}});</script></div>
+<div class="chart-box"><h3>syncPropose (1KB)</h3><canvas id="thrpt_6"></canvas><script>new Chart(document.getElementById('thrpt_6'),{type:'bar',data:{labels:["t=1"],datasets:[{label:'ops/ms',data:[0.6],backgroundColor:'#ff9f4080',borderColor:'#ff9f40',borderWidth:1}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,title:{display:true,text:'ops/ms'}}}}});</script></div>
+<div class="chart-box"><h3>syncPropose (4KB)</h3><canvas id="thrpt_7"></canvas><script>new Chart(document.getElementById('thrpt_7'),{type:'bar',data:{labels:["t=1"],datasets:[{label:'ops/ms',data:[0.6],backgroundColor:'#c9cbcf80',borderColor:'#c9cbcf',borderWidth:1}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,title:{display:true,text:'ops/ms'}}}}});</script></div>
+<div class="chart-box"><h3>syncPropose (16KB)</h3><canvas id="thrpt_8"></canvas><script>new Chart(document.getElementById('thrpt_8'),{type:'bar',data:{labels:["t=1"],datasets:[{label:'ops/ms',data:[0.5],backgroundColor:'#e74c3c80',borderColor:'#e74c3c',borderWidth:1}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,title:{display:true,text:'ops/ms'}}}}});</script></div>
+<div class="chart-box"><h3>syncPropose (64KB)</h3><canvas id="thrpt_9"></canvas><script>new Chart(document.getElementById('thrpt_9'),{type:'bar',data:{labels:["t=1"],datasets:[{label:'ops/ms',data:[0.4],backgroundColor:'#2ecc7180',borderColor:'#2ecc71',borderWidth:1}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,title:{display:true,text:'ops/ms'}}}}});</script></div>
+</div></div>
+<div class="section"><h2>Propose Latency Percentiles</h2>
+<table><tr><th>Method</th><th>Payload</th><th>Threads</th><th style="text-align:right">p50</th><th style="text-align:right">p90</th><th style="text-align:right">p99</th><th style="text-align:right">p99.9</th><th>Unit</th></tr>
+<tr><td>syncPropose</td><td class="num">128B</td><td class="num">1</td><td class="num">1.544</td><td class="num">1.776</td><td class="num">4.252</td><td class="num">6.039</td><td>ms/op</td></tr>
+<tr><td>syncPropose</td><td class="num">1KB</td><td class="num">1</td><td class="num">1.585</td><td class="num">1.837</td><td class="num">4.312</td><td class="num">6.047</td><td>ms/op</td></tr>
+<tr><td>syncPropose</td><td class="num">4KB</td><td class="num">1</td><td class="num">1.681</td><td class="num">1.946</td><td class="num">4.325</td><td class="num">5.546</td><td>ms/op</td></tr>
+<tr><td>syncPropose</td><td class="num">16KB</td><td class="num">1</td><td class="num">1.794</td><td class="num">2.075</td><td class="num">4.488</td><td class="num">5.976</td><td>ms/op</td></tr>
+<tr><td>syncPropose</td><td class="num">64KB</td><td class="num">1</td><td class="num">2.187</td><td class="num">2.658</td><td class="num">5.087</td><td class="num">6.780</td><td>ms/op</td></tr>
+</table></div>
+<div class="section"><h2>Read Throughput (under write load)</h2>
+<table><tr><th>Method</th><th>Write QPS</th><th style="text-align:right">Ops/ms</th><th style="text-align:right">± Error</th></tr>
+<tr><td>asyncRead</td><td class="num">0</td><td class="num">3.1</td><td class="num">±0.1</td></tr>
+<tr><td>asyncRead</td><td class="num">100</td><td class="num">1.3</td><td class="num">±0.1</td></tr>
+<tr><td>asyncRead</td><td class="num">500</td><td class="num">0.6</td><td class="num">±0.3</td></tr>
+<tr><td>asyncRead</td><td class="num">2000</td><td class="num">0.2</td><td class="num">±0.1</td></tr>
+<tr><td>syncRead</td><td class="num">0</td><td class="num">2.1</td><td class="num">±0.1</td></tr>
+<tr><td>syncRead</td><td class="num">100</td><td class="num">1.8</td><td class="num">±0.1</td></tr>
+<tr><td>syncRead</td><td class="num">500</td><td class="num">0.7</td><td class="num">±0.1</td></tr>
+<tr><td>syncRead</td><td class="num">1000</td><td class="num">0.1</td><td class="num">±0.1</td></tr>
+<tr><td>syncRead</td><td class="num">2000</td><td class="num">0.0</td><td class="num">±0.0</td></tr>
+</table><div class="charts">
+<div class="chart-box"><h3>asyncRead vs Write Load</h3><canvas id="read_0"></canvas><script>new Chart(document.getElementById('read_0'),{type:'bar',data:{labels:["0qps", "100qps", "500qps", "2000qps"],datasets:[{label:'ops/ms',data:[3.1, 1.3, 0.6, 0.2],backgroundColor:'#3273dc80',borderColor:'#3273dc',borderWidth:1}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,title:{display:true,text:'ops/ms'}}}}});</script></div>
+<div class="chart-box"><h3>syncRead vs Write Load</h3><canvas id="read_1"></canvas><script>new Chart(document.getElementById('read_1'),{type:'bar',data:{labels:["0qps", "100qps", "500qps", "1000qps", "2000qps"],datasets:[{label:'ops/ms',data:[2.1, 1.8, 0.7, 0.1, 0.0],backgroundColor:'#ff638480',borderColor:'#ff6384',borderWidth:1}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,title:{display:true,text:'ops/ms'}}}}});</script></div>
+</div></div>
+<div class="section"><h2>Read Latency Percentiles (under write load)</h2>
+<table><tr><th>Method</th><th>Write QPS</th><th style="text-align:right">p50</th><th style="text-align:right">p90</th><th style="text-align:right">p99</th><th style="text-align:right">p99.9</th><th>Unit</th></tr>
+<tr><td>syncRead</td><td class="num">0</td><td class="num">0.461</td><td class="num">0.515</td><td class="num">0.597</td><td class="num">1.407</td><td>ms/op</td></tr>
+<tr><td>syncRead</td><td class="num">100</td><td class="num">0.490</td><td class="num">0.753</td><td class="num">1.545</td><td class="num">3.013</td><td>ms/op</td></tr>
+<tr><td>syncRead</td><td class="num">500</td><td class="num">1.536</td><td class="num">2.236</td><td class="num">3.875</td><td class="num">6.094</td><td>ms/op</td></tr>
+<tr><td>syncRead</td><td class="num">1000</td><td class="num">17.138</td><td class="num">31.392</td><td class="num">123.470</td><td class="num">155.242</td><td>ms/op</td></tr>
+<tr><td>syncRead</td><td class="num">2000</td><td class="num">122.946</td><td class="num">203.948</td><td class="num">279.236</td><td class="num">299.368</td><td>ms/op</td></tr>
+</table></div>
+<div class="section"><h2>Propose Capacity Sweep</h2>
+<table><tr><th>Payload</th><th>Target</th><th style="text-align:right">Actual</th><th style="text-align:right">Success</th><th style="text-align:right">Errors</th><th style="text-align:right">p50(us)</th><th style="text-align:right">p99(us)</th><th style="text-align:right">p99.9(us)</th><th style="text-align:right">ErrRate</th></tr>
+<tr><td>128B</td><td class="num">100</td><td class="num">100</td><td class="num">3000</td><td class="num">0</td><td class="num">1124</td><td class="num">3574</td><td class="num">5767</td><td class="num">0.0%</td></tr>
+<tr><td>128B</td><td class="num">500</td><td class="num">500</td><td class="num">15000</td><td class="num">0</td><td class="num">911</td><td class="num">3817</td><td class="num">6753</td><td class="num">0.0%</td></tr>
+<tr><td>128B</td><td class="num">1000</td><td class="num">1000</td><td class="num">30000</td><td class="num">0</td><td class="num">2985</td><td class="num">205198</td><td class="num">263172</td><td class="num">0.0%</td></tr>
+<tr><td>128B</td><td class="num">2000</td><td class="num">1991</td><td class="num">59733</td><td class="num">0</td><td class="num">197456</td><td class="num">522813</td><td class="num">576725</td><td class="num">0.0%</td></tr>
+<tr><td>128B</td><td class="num">3000</td><td class="num">2956</td><td class="num">88671</td><td class="num">0</td><td class="num">172452</td><td class="num">332539</td><td class="num">443156</td><td class="num">0.0%</td></tr>
+<tr><td>128B</td><td class="num">5000</td><td class="num">3543</td><td class="num">106292</td><td class="num">0</td><td class="num">178194</td><td class="num">333127</td><td class="num">371637</td><td class="num">0.0%</td></tr>
+<tr><td>128B</td><td class="num">8000</td><td class="num">3350</td><td class="num">100511</td><td class="num">0</td><td class="num">190274</td><td class="num">384509</td><td class="num">436516</td><td class="num">0.0%</td></tr>
+<tr><td>128B</td><td class="num">10000</td><td class="num">3418</td><td class="num">102536</td><td class="num">0</td><td class="num">182485</td><td class="num">417234</td><td class="num">476173</td><td class="num">0.0%</td></tr>
+<tr><td>1KB</td><td class="num">100</td><td class="num">100</td><td class="num">3000</td><td class="num">0</td><td class="num">1129</td><td class="num">3329</td><td class="num">22921</td><td class="num">0.0%</td></tr>
+<tr><td>1KB</td><td class="num">500</td><td class="num">500</td><td class="num">15000</td><td class="num">0</td><td class="num">972</td><td class="num">3550</td><td class="num">5462</td><td class="num">0.0%</td></tr>
+<tr><td>1KB</td><td class="num">1000</td><td class="num">1000</td><td class="num">30000</td><td class="num">0</td><td class="num">4094</td><td class="num">109762</td><td class="num">125699</td><td class="num">0.0%</td></tr>
+<tr><td>1KB</td><td class="num">2000</td><td class="num">1954</td><td class="num">58609</td><td class="num">0</td><td class="num">287262</td><td class="num">554768</td><td class="num">616244</td><td class="num">0.0%</td></tr>
+<tr><td>1KB</td><td class="num">3000</td><td class="num">2633</td><td class="num">78996</td><td class="num">0</td><td class="num">235057</td><td class="num">535410</td><td class="num">545711</td><td class="num">0.0%</td></tr>
+<tr><td>1KB</td><td class="num">5000</td><td class="num">2971</td><td class="num">89123</td><td class="num">0</td><td class="num">228963</td><td class="num">491539</td><td class="num">573287</td><td class="num">0.0%</td></tr>
+<tr><td>1KB</td><td class="num">8000</td><td class="num">2739</td><td class="num">82182</td><td class="num">0</td><td class="num">243687</td><td class="num">592077</td><td class="num">763296</td><td class="num">0.0%</td></tr>
+<tr><td>1KB</td><td class="num">10000</td><td class="num">3305</td><td class="num">99148</td><td class="num">0</td><td class="num">220009</td><td class="num">410849</td><td class="num">502357</td><td class="num">0.0%</td></tr>
+<tr><td>4KB</td><td class="num">100</td><td class="num">100</td><td class="num">3000</td><td class="num">0</td><td class="num">1210</td><td class="num">3109</td><td class="num">5220</td><td class="num">0.0%</td></tr>
+<tr><td>4KB</td><td class="num">500</td><td class="num">500</td><td class="num">15000</td><td class="num">0</td><td class="num">1039</td><td class="num">3701</td><td class="num">6391</td><td class="num">0.0%</td></tr>
+<tr><td>4KB</td><td class="num">1000</td><td class="num">1000</td><td class="num">30000</td><td class="num">0</td><td class="num">4318</td><td class="num">53828</td><td class="num">66538</td><td class="num">0.0%</td></tr>
+<tr><td>4KB</td><td class="num">2000</td><td class="num">1866</td><td class="num">55998</td><td class="num">0</td><td class="num">362288</td><td class="num">682310</td><td class="num">775309</td><td class="num">0.0%</td></tr>
+<tr><td>4KB</td><td class="num">3000</td><td class="num">2092</td><td class="num">62757</td><td class="num">0</td><td class="num">346152</td><td class="num">711131</td><td class="num">866866</td><td class="num">0.0%</td></tr>
+<tr><td>4KB</td><td class="num">5000</td><td class="num">2224</td><td class="num">66725</td><td class="num">0</td><td class="num">328139</td><td class="num">651941</td><td class="num">709637</td><td class="num">0.0%</td></tr>
+<tr><td>4KB</td><td class="num">8000</td><td class="num">2313</td><td class="num">69402</td><td class="num">0</td><td class="num">311141</td><td class="num">641428</td><td class="num">685583</td><td class="num">0.0%</td></tr>
+<tr><td>4KB</td><td class="num">10000</td><td class="num">2184</td><td class="num">65528</td><td class="num">0</td><td class="num">314789</td><td class="num">588111</td><td class="num">675486</td><td class="num">0.0%</td></tr>
+<tr><td>16KB</td><td class="num">100</td><td class="num">100</td><td class="num">3000</td><td class="num">0</td><td class="num">1307</td><td class="num">3924</td><td class="num">5513</td><td class="num">0.0%</td></tr>
+<tr><td>16KB</td><td class="num">500</td><td class="num">500</td><td class="num">15000</td><td class="num">0</td><td class="num">1190</td><td class="num">637478</td><td class="num">855415</td><td class="num">0.0%</td></tr>
+<tr><td>16KB</td><td class="num">1000</td><td class="num">982</td><td class="num">29470</td><td class="num">0</td><td class="num">722712</td><td class="num">1102575</td><td class="num">1215348</td><td class="num">0.0%</td></tr>
+<tr><td>16KB</td><td class="num">2000</td><td class="num">1585</td><td class="num">47568</td><td class="num">0</td><td class="num">465521</td><td class="num">835434</td><td class="num">886570</td><td class="num">0.0%</td></tr>
+<tr><td>16KB</td><td class="num">3000</td><td class="num">1544</td><td class="num">46317</td><td class="num">0</td><td class="num">432031</td><td class="num">877676</td><td class="num">989729</td><td class="num">0.0%</td></tr>
+<tr><td>16KB</td><td class="num">5000</td><td class="num">1642</td><td class="num">49273</td><td class="num">0</td><td class="num">440603</td><td class="num">859755</td><td class="num">910907</td><td class="num">0.0%</td></tr>
+<tr><td>16KB</td><td class="num">8000</td><td class="num">1620</td><td class="num">48586</td><td class="num">0</td><td class="num">508335</td><td class="num">815301</td><td class="num">907611</td><td class="num">0.0%</td></tr>
+<tr><td>16KB</td><td class="num">10000</td><td class="num">1359</td><td class="num">40763</td><td class="num">0</td><td class="num">671605</td><td class="num">968220</td><td class="num">1132195</td><td class="num">0.0%</td></tr>
+<tr><td>64KB</td><td class="num">100</td><td class="num">100</td><td class="num">3000</td><td class="num">0</td><td class="num">1749</td><td class="num">3763</td><td class="num">5113</td><td class="num">0.0%</td></tr>
+<tr><td>64KB</td><td class="num">500</td><td class="num">500</td><td class="num">15000</td><td class="num">0</td><td class="num">2362</td><td class="num">5989</td><td class="num">10033</td><td class="num">0.0%</td></tr>
+<tr><td>64KB</td><td class="num">1000</td><td class="num">372</td><td class="num">11154</td><td class="num" style="color:#e74c3c">18826</td><td class="num">2783780</td><td class="num">3906045</td><td class="num">4020440</td><td class="num" style="color:#e74c3c">62.8%</td></tr>
+</table>
+<div class="charts">
+<div class="chart-box"><h3>Propose 128B</h3><canvas id="cap_propose_0"></canvas><script>new Chart(document.getElementById('cap_propose_0'),{type:'line',data:{labels:["100", "500", "1000", "2000", "3000", "5000", "8000", "10000"],datasets:[{label:'Actual ops/s',data:[100, 500, 1000, 1991, 2956, 3543, 3350, 3418],borderColor:'#3273dc',backgroundColor:'#3273dc40',yAxisID:'y',tension:0.2},{label:'p99 (ms)',data:[3.6, 3.8, 205.2, 522.8, 332.5, 333.1, 384.5, 417.2],borderColor:'#ffce56',backgroundColor:'#ffce5640',yAxisID:'y1',borderDash:[5,5],tension:0.2}]},options:{responsive:true,scales:{x:{title:{display:true,text:'Target rate (ops/s)'}},y:{type:'linear',position:'left',beginAtZero:true,title:{display:true,text:'Actual ops/s'}},y1:{type:'linear',position:'right',beginAtZero:true,title:{display:true,text:'p99 latency (ms)'},grid:{drawOnChartArea:false}}}}});</script></div>
+<div class="chart-box"><h3>Propose 1KB</h3><canvas id="cap_propose_1"></canvas><script>new Chart(document.getElementById('cap_propose_1'),{type:'line',data:{labels:["100", "500", "1000", "2000", "3000", "5000", "8000", "10000"],datasets:[{label:'Actual ops/s',data:[100, 500, 1000, 1954, 2633, 2971, 2739, 3305],borderColor:'#ff6384',backgroundColor:'#ff638440',yAxisID:'y',tension:0.2},{label:'p99 (ms)',data:[3.3, 3.5, 109.8, 554.8, 535.4, 491.5, 592.1, 410.8],borderColor:'#4bc0c0',backgroundColor:'#4bc0c040',yAxisID:'y1',borderDash:[5,5],tension:0.2}]},options:{responsive:true,scales:{x:{title:{display:true,text:'Target rate (ops/s)'}},y:{type:'linear',position:'left',beginAtZero:true,title:{display:true,text:'Actual ops/s'}},y1:{type:'linear',position:'right',beginAtZero:true,title:{display:true,text:'p99 latency (ms)'},grid:{drawOnChartArea:false}}}}});</script></div>
+<div class="chart-box"><h3>Propose 4KB</h3><canvas id="cap_propose_2"></canvas><script>new Chart(document.getElementById('cap_propose_2'),{type:'line',data:{labels:["100", "500", "1000", "2000", "3000", "5000", "8000", "10000"],datasets:[{label:'Actual ops/s',data:[100, 500, 1000, 1866, 2092, 2224, 2313, 2184],borderColor:'#36a2eb',backgroundColor:'#36a2eb40',yAxisID:'y',tension:0.2},{label:'p99 (ms)',data:[3.1, 3.7, 53.8, 682.3, 711.1, 651.9, 641.4, 588.1],borderColor:'#9966ff',backgroundColor:'#9966ff40',yAxisID:'y1',borderDash:[5,5],tension:0.2}]},options:{responsive:true,scales:{x:{title:{display:true,text:'Target rate (ops/s)'}},y:{type:'linear',position:'left',beginAtZero:true,title:{display:true,text:'Actual ops/s'}},y1:{type:'linear',position:'right',beginAtZero:true,title:{display:true,text:'p99 latency (ms)'},grid:{drawOnChartArea:false}}}}});</script></div>
+<div class="chart-box"><h3>Propose 16KB</h3><canvas id="cap_propose_3"></canvas><script>new Chart(document.getElementById('cap_propose_3'),{type:'line',data:{labels:["100", "500", "1000", "2000", "3000", "5000", "8000", "10000"],datasets:[{label:'Actual ops/s',data:[100, 500, 982, 1585, 1544, 1642, 1620, 1359],borderColor:'#ffce56',backgroundColor:'#ffce5640',yAxisID:'y',tension:0.2},{label:'p99 (ms)',data:[3.9, 637.5, 1102.6, 835.4, 877.7, 859.8, 815.3, 968.2],borderColor:'#ff9f40',backgroundColor:'#ff9f4040',yAxisID:'y1',borderDash:[5,5],tension:0.2}]},options:{responsive:true,scales:{x:{title:{display:true,text:'Target rate (ops/s)'}},y:{type:'linear',position:'left',beginAtZero:true,title:{display:true,text:'Actual ops/s'}},y1:{type:'linear',position:'right',beginAtZero:true,title:{display:true,text:'p99 latency (ms)'},grid:{drawOnChartArea:false}}}}});</script></div>
+<div class="chart-box"><h3>Propose 64KB</h3><canvas id="cap_propose_4"></canvas><script>new Chart(document.getElementById('cap_propose_4'),{type:'line',data:{labels:["100", "500", "1000"],datasets:[{label:'Actual ops/s',data:[100, 500, 372],borderColor:'#4bc0c0',backgroundColor:'#4bc0c040',yAxisID:'y',tension:0.2},{label:'p99 (ms)',data:[3.8, 6.0, 3906.0],borderColor:'#c9cbcf',backgroundColor:'#c9cbcf40',yAxisID:'y1',borderDash:[5,5],tension:0.2}]},options:{responsive:true,scales:{x:{title:{display:true,text:'Target rate (ops/s)'}},y:{type:'linear',position:'left',beginAtZero:true,title:{display:true,text:'Actual ops/s'}},y1:{type:'linear',position:'right',beginAtZero:true,title:{display:true,text:'p99 latency (ms)'},grid:{drawOnChartArea:false}}}}});</script></div>
+</div></div>
+<div class="section"><h2>Read Capacity Sweep</h2>
+<table><tr><th>Target</th><th style="text-align:right">Actual</th><th style="text-align:right">Success</th><th style="text-align:right">Errors</th><th style="text-align:right">p50(us)</th><th style="text-align:right">p99(us)</th><th style="text-align:right">p99.9(us)</th><th style="text-align:right">ErrRate</th></tr>
+<tr><td class="num">100</td><td class="num">100</td><td class="num">2999</td><td class="num">0</td><td class="num">830</td><td class="num">3276</td><td class="num">5791</td><td class="num">0.0%</td></tr>
+<tr><td class="num">500</td><td class="num">500</td><td class="num">15000</td><td class="num">0</td><td class="num">793</td><td class="num">59540</td><td class="num">66788</td><td class="num">0.0%</td></tr>
+<tr><td class="num">1000</td><td class="num">759</td><td class="num">22769</td><td class="num">0</td><td class="num">1344541</td><td class="num">2221599</td><td class="num">2288883</td><td class="num">0.0%</td></tr>
+<tr><td class="num">2000</td><td class="num">792</td><td class="num">23753</td><td class="num">0</td><td class="num">1330960</td><td class="num">1399347</td><td class="num">1408463</td><td class="num">0.0%</td></tr>
+<tr><td class="num">3000</td><td class="num">734</td><td class="num">22011</td><td class="num">0</td><td class="num">1370630</td><td class="num">1596862</td><td class="num">1604299</td><td class="num">0.0%</td></tr>
+<tr><td class="num">5000</td><td class="num">707</td><td class="num">21220</td><td class="num">0</td><td class="num">1431933</td><td class="num">1985224</td><td class="num">1997965</td><td class="num">0.0%</td></tr>
+<tr><td class="num">8000</td><td class="num">560</td><td class="num">16814</td><td class="num">0</td><td class="num">1641513</td><td class="num">3361038</td><td class="num">3613469</td><td class="num">0.0%</td></tr>
+<tr><td class="num">10000</td><td class="num">491</td><td class="num">14734</td><td class="num">0</td><td class="num">1819810</td><td class="num">4468254</td><td class="num">4521540</td><td class="num">0.0%</td></tr>
+</table>
+<div class="charts"><div class="chart-box"><h3>Read Capacity</h3><canvas id="cap_read"></canvas><script>new Chart(document.getElementById('cap_read'),{type:'line',data:{labels:["100", "500", "1000", "2000", "3000", "5000", "8000", "10000"],datasets:[{label:'Actual ops/s',data:[100, 500, 759, 792, 734, 707, 560, 491],borderColor:'#3273dc',backgroundColor:'#3273dc40',yAxisID:'y',tension:0.2},{label:'p99 (ms)',data:[3.3, 59.5, 2221.6, 1399.3, 1596.9, 1985.2, 3361.0, 4468.3],borderColor:'#ff6384',backgroundColor:'#ff638440',yAxisID:'y1',borderDash:[5,5],tension:0.2}]},options:{responsive:true,scales:{x:{title:{display:true,text:'Target rate (ops/s)'}},y:{type:'linear',position:'left',beginAtZero:true,title:{display:true,text:'Actual ops/s'}},y1:{type:'linear',position:'right',beginAtZero:true,title:{display:true,text:'p99 latency (ms)'},grid:{drawOnChartArea:false}}}}});</script></div></div></div>
+</body></html>
